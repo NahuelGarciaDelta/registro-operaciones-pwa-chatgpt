@@ -41,6 +41,24 @@ const blank = (project = 'JOSE MARIA'): Rop02Record => ({
   'Observaciones 2': '', 'Cambio de tareas planificadas': 'Sin cambio de tareas planificadas'
 })
 
+const receiptCode = (id: string, interno: string, parte: number | null) => {
+  const shortId = id.replace(/-/g, '').slice(0, 6).toUpperCase()
+  const compactInternal = interno.replace(/[^A-Za-z0-9]/g, '')
+  return `ROP02-${compactInternal}-${parte ?? 'SREF'}-${shortId}`
+}
+
+const formatDateTime = (iso: string) => {
+  try {
+    return new Intl.DateTimeFormat('es-AR', {
+      timeZone: 'America/Argentina/San_Juan',
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    }).format(new Date(iso))
+  } catch {
+    return iso
+  }
+}
+
 export default function App() {
   const [data, setData] = useState<BootstrapData | null>(null)
   const [form, setForm] = useState<Rop02Record>(blank())
@@ -48,7 +66,7 @@ export default function App() {
   const [pending, setPending] = useState<PendingRecord[]>([])
   const [online, setOnline] = useState(navigator.onLine)
   const [msg, setMsg] = useState('')
-  const [tab, setTab] = useState<'form' | 'pending'>('form')
+  const [tab, setTab] = useState<'form' | 'pending' | 'receipts'>('form')
   const [syncing, setSyncing] = useState(false)
   const syncInFlight = useRef(false)
 
@@ -87,18 +105,17 @@ export default function App() {
           try {
             definitive = await createRecord(item)
           } catch (createError) {
-            // Puede ocurrir que Google Sheets haya guardado la fila pero se pierda la
-            // respuesta al celular (por cambio de red, timeout, cierre de pestaña, etc.).
-            // Antes de marcar error, verificamos por ID para no dejar un registro
-            // eternamente en "syncing" ni volver a insertarlo por duplicado.
             const recovered = await checkRecord(item.id).catch(() => null)
             if (!recovered) throw createError
             definitive = recovered
           }
 
-          // En dispositivos compartidos no guardamos historial local de cargas sincronizadas.
-          // Una vez confirmada la escritura en Sheets, se elimina la carga pendiente del equipo.
-          void definitive
+          // Una carga confirmada por Sheets pasa a Comprobantes antes de salir de Pendientes.
+          await db.syncedRecords.put({
+            id: item.id,
+            payload: definitive,
+            syncedAt: new Date().toISOString()
+          })
           await db.syncQueue.delete(item.id)
           ok++
         } catch (e) {
@@ -129,7 +146,7 @@ export default function App() {
 
     if (showResult) {
       if (errors) setMsg(`No se pudo sincronizar ${errors} carga(s). ${lastError}`)
-      else if (ok) setMsg(`${ok} carga(s) sincronizada(s) correctamente con la planilla.`)
+      else if (ok) setMsg(`${ok} carga(s) sincronizada(s) correctamente. El comprobante quedó disponible.`)
       else setMsg('No hay cargas pendientes de sincronización.')
     }
   }, [])
@@ -154,8 +171,6 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // Borra cualquier historial local creado por versiones anteriores en este dispositivo.
-    db.syncedRecords.clear().catch(() => undefined)
     load()
     const on = () => { setOnline(true); sync() }
     const off = () => setOnline(false)
@@ -238,7 +253,7 @@ export default function App() {
         syncStatus: 'pending', syncAttempts: 0
       }
       await db.syncQueue.put(item)
-      setMsg('Registro guardado en el dispositivo.')
+      setMsg('Registro guardado en el dispositivo. Hasta que se sincronice aparecerá en Pendientes.')
       setSig(undefined)
       setForm(blank(form.Proyecto || 'JOSE MARIA'))
       await reloadPending()
@@ -249,6 +264,7 @@ export default function App() {
   }
 
   if (!data) return <main className="shell"><div className="card"><h1>DELTA MINING</h1><p>Preparando datos…</p><p>La primera apertura requiere internet.</p></div></main>
+  const receiptsPromise = () => db.syncedRecords.orderBy('syncedAt').reverse().limit(100).toArray()
 
   return <main className="shell">
     <header>
@@ -258,6 +274,7 @@ export default function App() {
     <nav>
       <button onClick={() => setTab('form')} className={tab === 'form' ? 'active' : ''}>Nueva carga</button>
       <button onClick={() => setTab('pending')} className={tab === 'pending' ? 'active' : ''}>Pendientes ({pending.length})</button>
+      <button onClick={() => setTab('receipts')} className={tab === 'receipts' ? 'active' : ''}>Comprobantes</button>
     </nav>
 
     {tab === 'form' && <>
@@ -307,7 +324,58 @@ export default function App() {
     {tab === 'pending' && <section className="card">
       <div className="row"><h2>Pendientes</h2><button className="secondary" disabled={syncing} onClick={() => sync(true)}>{syncing ? 'Sincronizando…' : 'Sincronizar ahora'}</button></div>
       {msg && <div className="notice">{msg}</div>}
-      {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ''}</small></article>)}
+      {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Operador}</span><span>{p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ' · Guardado en este dispositivo'}</small></article>)}
     </section>}
+
+    {tab === 'receipts' && <Receipts load={receiptsPromise} />}
   </main>
+}
+
+function Receipts({ load }: { load: () => Promise<any[]> }) {
+  const [rows, setRows] = useState<any[]>([])
+
+  useEffect(() => {
+    load().then(setRows)
+  }, [load])
+
+  const copyReceipt = async (row: any) => {
+    const p = row.payload as Rop02Record
+    const code = receiptCode(row.id, p.Interno, p['N° Parte'])
+    const text = [
+      'DELTA MINING - COMPROBANTE ROP02',
+      `Código: ${code}`,
+      `Estado: SINCRONIZADO`,
+      `Operador: ${p.Operador}`,
+      `Fecha: ${p.Fecha}`,
+      `Interno: ${p.Interno}`,
+      `Equipo: ${p.Equipo}`,
+      `Parte: ${p['N° Parte'] ?? ''}`,
+      `HI: ${p['Horómetro inicial'] ?? ''}`,
+      `HF: ${p['Horómetro final'] ?? ''}`,
+      `Horas: ${p['Cant. Hs.'] ?? ''}`,
+      `Sincronizado: ${formatDateTime(row.syncedAt)}`
+    ].join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      window.prompt('Copiá el comprobante:', text)
+    }
+  }
+
+  return <section className="card">
+    <h2>Comprobantes de carga</h2>
+    <p>Estas cargas fueron confirmadas por la planilla. El código sirve como constancia de la carga realizada.</p>
+    {rows.length === 0 ? <p>Todavía no hay comprobantes en este dispositivo.</p> : rows.map(row => {
+      const p = row.payload as Rop02Record
+      const code = receiptCode(row.id, p.Interno, p['N° Parte'])
+      return <article className="item" key={row.id}>
+        <b>{p.Operador}</b>
+        <span>{p.Interno} · {p.Equipo}</span>
+        <span>{p.Fecha} · Parte {p['N° Parte'] ?? 's/ref'} · HI {p['Horómetro inicial'] ?? '-'} → HF {p['Horómetro final'] ?? '-'}</span>
+        <small>✓ SINCRONIZADO · {formatDateTime(row.syncedAt)}</small>
+        <small>Comprobante: {code}</small>
+        <button className="secondary" type="button" onClick={() => copyReceipt(row)}>COPIAR COMPROBANTE</button>
+      </article>
+    })}
+  </section>
 }
