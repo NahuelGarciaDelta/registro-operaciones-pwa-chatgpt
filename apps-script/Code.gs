@@ -69,6 +69,7 @@ function doPost(e) {
     assertSecret_(body.secret);
     if (body.action === 'createRecord') return json_(createRecord_(body));
     if (body.action === 'checkRecord') return json_(checkRecord_(body.id));
+    if (body.action === 'listReceipts') return json_(listReceipts_(body.operator));
     throw new Error('Acción no válida');
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
@@ -204,9 +205,6 @@ function createRecord_(body) {
     const p = Object.assign({}, body.payload || {});
     p.ID = id;
 
-    // Compatibilidad con cargas realizadas mientras la columna ID no tenía encabezado.
-    // Si la fila ya llegó a Sheets pero el celular perdió la respuesta, la recuperamos
-    // por sus datos originales, escribimos el ID faltante y evitamos duplicarla.
     const legacyMatch = findLegacyPendingRow_(values, h, p, idCol);
     if (legacyMatch !== null) {
       sheet.getRange(legacyMatch + 1, idCol + 1).setValue(id);
@@ -330,6 +328,83 @@ function checkRecord_(rawId) {
     }
   }
   return { ok: true, found: false };
+}
+
+function listReceipts_(rawOperator) {
+  const operator = clean_(rawOperator);
+  if (!operator) throw new Error('Operador requerido para consultar comprobantes.');
+
+  const sheet = ss_().getSheetByName(MAIN_SHEET);
+  if (!sheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
+  const values = sheet.getDataRange().getValues();
+  if (!values.length) return { ok: true, operator, receipts: [] };
+
+  const headers = values[0];
+  const idCol = ensureIdColumn_(sheet, headers);
+  headers[idCol] = 'ID';
+  const h = headerMap_(headers);
+
+  const required = ['Fecha', 'Interno', 'Equipo', 'Operador', 'Turno de trabajo', 'N° Parte', 'Proyecto', 'Area de trabajo', 'Horómetro inicial', 'Horómetro final', 'Cant. Hs.', 'OD o FS'];
+  required.forEach(name => {
+    if (h[name] === undefined) throw new Error('Falta la columna ' + name + ' en ' + MAIN_SHEET + '.');
+  });
+
+  const receipts = [];
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (clean_(r[h['Operador']]) !== operator) continue;
+
+    const record = rowToRecord_(headers, r);
+    const interno = clean_(record.Interno);
+    const parte = int_(record['N° Parte']);
+    if (!interno || parte == null) continue;
+
+    receipts.push({
+      id: clean_(record.ID) || ('ROW-' + (i + 1)),
+      codigo: receiptCode_(record, i + 1),
+      fecha: dateISO_(record.Fecha),
+      operador: clean_(record.Operador),
+      interno,
+      equipo: clean_(record.Equipo),
+      turno: clean_(record['Turno de trabajo']),
+      parte,
+      proyecto: clean_(record.Proyecto),
+      area: clean_(record['Area de trabajo']),
+      hi: int_(record['Horómetro inicial']),
+      hf: int_(record['Horómetro final']),
+      horas: num_(record['Cant. Hs.']),
+      estado: clean_(record['OD o FS']),
+      rowNumber: i + 1
+    });
+  }
+
+  receipts.sort((a, b) => {
+    if (a.fecha !== b.fecha) return a.fecha < b.fecha ? 1 : -1;
+    return b.rowNumber - a.rowNumber;
+  });
+
+  receipts.forEach(r => delete r.rowNumber);
+  return { ok: true, operator, receipts };
+}
+
+function receiptCode_(record, rowNumber) {
+  const interno = clean_(record.Interno);
+  const parte = int_(record['N° Parte']);
+  const compactInternal = interno.replace(/[^A-Za-z0-9]/g, '');
+  const id = clean_(record.ID).replace(/-/g, '');
+  let token = id ? id.slice(0, 6).toUpperCase() : '';
+
+  if (!token) {
+    const source = [
+      dateISO_(record.Fecha), interno, parte == null ? '' : parte,
+      clean_(record.Operador), clean_(record['Turno de trabajo']),
+      int_(record['Horómetro inicial']), int_(record['Horómetro final']), rowNumber
+    ].join('|');
+    const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, source, Utilities.Charset.UTF_8);
+    token = digest.slice(0, 3).map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('').toUpperCase();
+  }
+
+  return `ROP02-${compactInternal}-${parte == null ? 'SREF' : parte}-${token}`;
 }
 
 function ensureIdColumn_(sheet, headers) {
