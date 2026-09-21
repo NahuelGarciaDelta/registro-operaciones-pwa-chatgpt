@@ -18,6 +18,7 @@ export function provisionalReference(interno: string, states: EquipmentState[], 
     return {
       parte: local['N° Parte'] == null ? null : local['N° Parte'] + 1,
       hi: local['Horómetro final'],
+      turnoAnterior: local['Turno de trabajo'] || null,
       source: 'local' as const
     }
   }
@@ -25,6 +26,7 @@ export function provisionalReference(interno: string, states: EquipmentState[], 
   return {
     parte: server?.ultimoNumeroParte == null ? null : server.ultimoNumeroParte + 1,
     hi: server?.ultimoHorometroFinal ?? null,
+    turnoAnterior: server?.ultimoTurno ?? null,
     source: server ? 'sync' as const : 'none' as const
   }
 }
