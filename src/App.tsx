@@ -4,7 +4,10 @@ import { checkRecord, createRecord, getBootstrap, getBootstrapLive, getReceipts,
 import { db } from './db'
 import { calcHours, estadoTexto, provisionalReference, tasksForEquipment } from './lib/business'
 import SignaturePad from './components/SignaturePad'
-import type { BootstrapData, EstadoEquipo, PendingRecord, Rop02Record } from './types'
+import type { BootstrapData, EstadoEquipo, PendingRecord, ProjectCatalog, Proyecto, Rop02Record } from './types'
+
+const PROJECTS: Proyecto[] = ['JOSE MARIA', 'FILO DEL SOL']
+const EMPTY_CATALOG: ProjectCatalog = { equipos: [], supervisoresDelta: [], supervisoresCliente: [], equipmentState: [] }
 
 const today = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Argentina/San_Juan', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -31,7 +34,7 @@ const schema = z.object({
   'Observaciones 1': z.string().trim().min(1)
 })
 
-const blank = (project = 'JOSE MARIA'): Rop02Record => ({
+const blank = (project: Proyecto = 'JOSE MARIA'): Rop02Record => ({
   ID: crypto.randomUUID(), Fecha: today(), Interno: '', Equipo: '', Operador: '',
   'Supervisor Delta': '', 'Supervisor Vial Cliente': '', 'Turno de trabajo': 'TURNO DIA',
   'N° Parte': null, Proyecto: project, 'Area de trabajo': 'Camino',
@@ -46,6 +49,23 @@ const formatDate = (iso: string) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : iso
 }
 
+const normalizeProject = (value: string): Proyecto => value === 'FILO DEL SOL' ? 'FILO DEL SOL' : 'JOSE MARIA'
+
+const projectCatalog = (data: BootstrapData | null, project: Proyecto): ProjectCatalog => {
+  if (!data) return EMPTY_CATALOG
+  const scoped = data.projectCatalogs?.[project]
+  if (scoped) return scoped
+  if (project === 'JOSE MARIA') {
+    return {
+      equipos: data.equipos || [],
+      supervisoresDelta: data.supervisoresDelta || [],
+      supervisoresCliente: data.supervisoresCliente || [],
+      equipmentState: data.equipmentState || []
+    }
+  }
+  return EMPTY_CATALOG
+}
+
 export default function App() {
   const [data, setData] = useState<BootstrapData | null>(null)
   const [form, setForm] = useState<Rop02Record>(blank())
@@ -58,6 +78,7 @@ export default function App() {
   const [lastOperator, setLastOperator] = useState('')
   const [turnoBlocked, setTurnoBlocked] = useState(false)
   const syncInFlight = useRef(false)
+  const qrHandled = useRef(false)
 
   const reloadPending = async () => setPending(await db.syncQueue.orderBy('createdAt').toArray())
 
@@ -140,7 +161,7 @@ export default function App() {
       const fresh = await getBootstrap()
       setData(fresh)
       await db.catalogs.put({ key: 'bootstrap', value: fresh })
-      setForm(f => ({ ...f, Proyecto: ['JOSE MARIA', 'FILO DEL SOL'].includes(f.Proyecto) ? f.Proyecto : 'JOSE MARIA' }))
+      setForm(f => ({ ...f, Proyecto: normalizeProject(f.Proyecto) }))
       if (showResult) setMsg('Listas actualizadas desde la fuente de datos.')
     } catch (e) {
       const cached = await db.catalogs.get('bootstrap')
@@ -169,39 +190,61 @@ export default function App() {
     return () => clearInterval(id)
   }, [sync])
 
-  const equipment = useMemo(() => data?.equipos.find(e => e.id === form.Interno), [data, form.Interno])
+  const currentProject = normalizeProject(form.Proyecto)
+  const catalog = useMemo(() => projectCatalog(data, currentProject), [data, currentProject])
+  const equipment = useMemo(() => catalog.equipos.find(e => e.id === form.Interno), [catalog.equipos, form.Interno])
   const tasks = useMemo(() => tasksForEquipment(data?.tareas || [], form.Equipo), [data, form.Equipo])
-  const shiftRef = useMemo(() => form.Interno && data ? provisionalReference(form.Interno, data.equipmentState, pending) : null, [form.Interno, data, pending])
+  const shiftRef = useMemo(
+    () => form.Interno && data ? provisionalReference(form.Interno, catalog.equipmentState, pending, currentProject) : null,
+    [form.Interno, data, catalog.equipmentState, pending, currentProject]
+  )
   const previousShift = shiftRef?.turnoAnterior || null
   const nightAllowed = previousShift === 'TURNO DIA'
   const turnoSaveBlocked = form['Turno de trabajo'] === 'TURNO NOCHE' && (turnoBlocked || !nightAllowed)
   const hfTooLow = form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro final'] < form['Horómetro inicial']
   const set = (k: keyof Rop02Record, v: any) => setForm(f => ({ ...f, [k]: v }))
 
-  const refreshReference = async (interno: string) => {
+  const chooseProject = (project: Proyecto) => {
+    setTurnoBlocked(false)
+    setSig(undefined)
+    setMsg('')
+    setForm(f => ({
+      ...f,
+      Proyecto: project,
+      Interno: '', Equipo: '', 'Supervisor Delta': '', 'Supervisor Vial Cliente': '',
+      'Turno de trabajo': 'TURNO DIA', 'N° Parte': null,
+      'Horómetro inicial': null, 'Horómetro final': null, 'Cant. Hs.': null,
+      'Tarea 1': '', 'Tarea 2': '', 'Observaciones 1': '', 'Observaciones 2': '', 'OD o FS': ''
+    }))
+  }
+
+  const refreshReference = async (interno: string, project: Proyecto) => {
     if (!data || !interno) return null
+    const scopedCatalog = projectCatalog(data, project)
     const localPending = pending
-      .filter(p => p.payload.Interno === interno)
+      .filter(p => p.payload.Interno === interno && p.payload.Proyecto === project)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .at(-1)
 
     if (localPending || !navigator.onLine) {
-      return provisionalReference(interno, data.equipmentState, pending)
+      return provisionalReference(interno, scopedCatalog.equipmentState, pending, project)
     }
 
     const fresh = await getBootstrapLive()
     setData(fresh)
     await db.catalogs.put({ key: 'bootstrap', value: fresh })
-    return provisionalReference(interno, fresh.equipmentState, pending)
+    const freshCatalog = projectCatalog(fresh, project)
+    return provisionalReference(interno, freshCatalog.equipmentState, pending, project)
   }
 
-  const chooseInterno = async (v: string) => {
+  const chooseInterno = async (v: string, project: Proyecto = currentProject) => {
     if (!data) return
     setTurnoBlocked(false)
-    const eq = data.equipos.find(e => e.id === v)
-    const ref = provisionalReference(v, data.equipmentState, pending)
+    const scopedCatalog = projectCatalog(data, project)
+    const eq = scopedCatalog.equipos.find(e => e.id === v)
+    const ref = provisionalReference(v, scopedCatalog.equipmentState, pending, project)
     setForm(f => ({
-      ...f, Interno: v, Equipo: eq?.equipo || '', 'N° Parte': ref.parte,
+      ...f, Proyecto: project, Interno: v, Equipo: eq?.equipo || '', 'N° Parte': ref.parte,
       'Horómetro inicial': ref.hi, 'Horómetro final': null, 'Cant. Hs.': null,
       'Turno de trabajo': 'TURNO DIA',
       'Tarea 1': '', 'Tarea 2': '', 'Observaciones 1': '', 'Observaciones 2': '', 'OD o FS': ''
@@ -210,9 +253,9 @@ export default function App() {
 
     if (!v) return
     try {
-      const freshRef = await refreshReference(v)
+      const freshRef = await refreshReference(v, project)
       if (!freshRef) return
-      setForm(f => f.Interno === v ? {
+      setForm(f => f.Interno === v && f.Proyecto === project ? {
         ...f,
         'N° Parte': freshRef.parte,
         'Horómetro inicial': freshRef.hi,
@@ -228,6 +271,34 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (!data || qrHandled.current) return
+    const params = new URLSearchParams(window.location.search)
+    const interno = params.get('interno')?.trim().toUpperCase()
+    if (!interno) {
+      qrHandled.current = true
+      return
+    }
+
+    const requestedProjectRaw = params.get('proyecto')?.trim().toUpperCase()
+    const requestedProject = PROJECTS.find(p => p === requestedProjectRaw)
+    const availableProjects = (data.projects?.length ? data.projects : PROJECTS) as Proyecto[]
+    const targetProject = requestedProject && projectCatalog(data, requestedProject).equipos.some(e => e.id.toUpperCase() === interno)
+      ? requestedProject
+      : availableProjects.find(project => projectCatalog(data, project).equipos.some(e => e.id.toUpperCase() === interno))
+
+    qrHandled.current = true
+    if (!targetProject) {
+      setMsg(`El equipo indicado por el QR (${interno}) no está cargado en EQUIPOS JM ni EQUIPOS FS.`)
+      return
+    }
+
+    setTab('form')
+    void chooseInterno(interno, targetProject)
+    // El QR se procesa una sola vez al abrir la aplicación.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
   const chooseTurno = async (v: string) => {
     if (v !== 'TURNO NOCHE') {
       setTurnoBlocked(false)
@@ -236,35 +307,27 @@ export default function App() {
       return
     }
 
-    // Mantener TURNO NOCHE seleccionado si es inválido. De esta forma el usuario
-    // debe cambiar explícitamente el turno y no puede guardar presionando nuevamente.
     set('Turno de trabajo', 'TURNO NOCHE')
 
     if (!form.Interno) {
-      const message = 'Primero seleccioná un equipo antes de elegir TURNO NOCHE.'
       setTurnoBlocked(true)
-      setMsg(message)
-      window.alert(message)
+      setMsg('Primero seleccioná un equipo antes de elegir TURNO NOCHE.')
       return
     }
 
     let ref = shiftRef
     try {
-      ref = await refreshReference(form.Interno)
+      ref = await refreshReference(form.Interno, currentProject)
     } catch {
-      const message = `No se pudo verificar el último turno de ${form.Interno} en la planilla. Por seguridad, TURNO NOCHE no fue habilitado.`
       setTurnoBlocked(true)
-      setMsg(message)
-      window.alert(message)
+      setMsg(`No se pudo verificar el último turno de ${form.Interno} en la planilla. Por seguridad, TURNO NOCHE no fue habilitado.`)
       return
     }
 
     if (ref?.turnoAnterior !== 'TURNO DIA') {
       const anterior = ref?.turnoAnterior || 'sin turno previo informado'
-      const message = `No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`
       setTurnoBlocked(true)
-      setMsg(message)
-      window.alert(message)
+      setMsg(`No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`)
       return
     }
 
@@ -304,11 +367,11 @@ export default function App() {
   const save = async () => {
     try {
       if (turnoSaveBlocked) {
-        throw new Error(`No se puede guardar este registro mientras el turno sea TURNO NOCHE. Cambiá el turno a TURNO DIA para continuar.`)
+        throw new Error('No se puede guardar este registro mientras el turno sea TURNO NOCHE. Cambiá el turno a TURNO DIA para continuar.')
       }
 
       if (form['N° Parte'] == null || form['Horómetro inicial'] == null) {
-        throw new Error('Este equipo no tiene una referencia previa de N° Parte u Horómetro inicial en la planilla. Debe cargarse una referencia antes de usar el formulario.')
+        throw new Error(`Este equipo no tiene una referencia previa de N° Parte u Horómetro inicial en ${currentProject}. Debe cargarse una referencia antes de usar el formulario.`)
       }
 
       const zeroHours = form['Horómetro final'] === form['Horómetro inicial']
@@ -317,11 +380,11 @@ export default function App() {
         if (value == null || (typeof value === 'string' && !value.trim())) missing.push(label)
       }
 
+      requireField('Proyecto', form.Proyecto)
       requireField('Fecha', form.Fecha)
       requireField('Operador', form.Operador)
       requireField('Supervisor Delta', form['Supervisor Delta'])
       requireField('Supervisor Vial Cliente', form['Supervisor Vial Cliente'])
-      requireField('Proyecto', form.Proyecto)
       requireField('Área', form['Area de trabajo'])
       requireField('Interno', form.Interno)
       requireField('Turno', form['Turno de trabajo'])
@@ -347,7 +410,7 @@ export default function App() {
       if (form['Turno de trabajo'] === 'TURNO NOCHE') {
         let latestRef = shiftRef
         try {
-          latestRef = await refreshReference(form.Interno)
+          latestRef = await refreshReference(form.Interno, currentProject)
         } catch {
           setTurnoBlocked(true)
           throw new Error(`No se pudo verificar el último turno de ${form.Interno} en la planilla. TURNO NOCHE no puede guardarse hasta poder verificarlo.`)
@@ -373,7 +436,7 @@ export default function App() {
       setMsg('Registro guardado en el dispositivo. Hasta que se sincronice aparecerá en Pendientes.')
       setSig(undefined)
       setTurnoBlocked(false)
-      setForm(blank(form.Proyecto || 'JOSE MARIA'))
+      setForm(blank(currentProject))
       await reloadPending()
       if (navigator.onLine) await sync(false)
     } catch (e) {
@@ -408,6 +471,8 @@ export default function App() {
 
   if (!data) return <main className="shell"><div className="card"><h1>DELTA MINING</h1><p>Preparando datos…</p><p>La primera apertura requiere internet.</p></div></main>
 
+  const projectOptions = (data.projects?.length ? data.projects : PROJECTS) as Proyecto[]
+
   return <main className="shell">
     <header>
       <div><strong>DELTA MINING</strong><span>Registro de Operaciones</span></div>
@@ -426,18 +491,18 @@ export default function App() {
       <section className="card formgrid">
         <p className="requiredNote wide">* Campos obligatorios</p>
         <h2 className="sectionTitle wide">DATOS</h2>
+        <label className="wide">Proyecto *<select required value={currentProject} onChange={e => chooseProject(e.target.value as Proyecto)}>{projectOptions.map(project => <option key={project} value={project}>{project === 'JOSE MARIA' ? 'JOSÉ MARÍA' : 'FILO DEL SOL'}</option>)}</select></label>
         <label>Fecha *<input required type="date" value={form.Fecha} onChange={e => set('Fecha', e.target.value)} /></label>
         <label>Operador *<select required value={form.Operador} onChange={e => { set('Operador', e.target.value); setLastOperator(e.target.value) }}><option value="">Seleccionar…</option>{data.operadores.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
-        <label>Supervisor Delta *<select required value={form['Supervisor Delta']} onChange={e => set('Supervisor Delta', e.target.value)}><option value="">Seleccionar…</option>{data.supervisoresDelta.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
-        <label>Supervisor Vial Cliente *<select required value={form['Supervisor Vial Cliente']} onChange={e => set('Supervisor Vial Cliente', e.target.value)}><option value="">Seleccionar…</option>{data.supervisoresCliente.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
-        <label>Proyecto *<select required value={form.Proyecto} onChange={e => set('Proyecto', e.target.value)}><option value="JOSE MARIA">JOSÉ MARÍA</option><option value="FILO DEL SOL">FILO DEL SOL</option></select></label>
+        <label>Supervisor Delta *<select required value={form['Supervisor Delta']} onChange={e => set('Supervisor Delta', e.target.value)}><option value="">Seleccionar…</option>{catalog.supervisoresDelta.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
+        <label>Supervisor Vial Cliente *<select required value={form['Supervisor Vial Cliente']} onChange={e => set('Supervisor Vial Cliente', e.target.value)}><option value="">Seleccionar…</option>{catalog.supervisoresCliente.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
         <label>Área *<select required value={form['Area de trabajo']} onChange={e => set('Area de trabajo', e.target.value)}><option value="">Seleccionar…</option>{data.areas.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
 
         <h2 className="sectionTitle wide">DATOS DEL EQUIPO</h2>
-        <label>Interno *<select required value={form.Interno} onChange={e => chooseInterno(e.target.value)}><option value="">Seleccionar…</option>{data.equipos.map(e => <option key={e.id} value={e.id}>{e.id}</option>)}</select></label>
+        <label>Interno *<select required value={form.Interno} onChange={e => chooseInterno(e.target.value)}><option value="">Seleccionar…</option>{catalog.equipos.map(e => <option key={e.id} value={e.id}>{e.id}</option>)}</select></label>
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
         <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => chooseTurno(e.target.value)}><option>TURNO DIA</option><option>TURNO NOCHE</option></select>{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}{turnoSaveBlocked && ' Debés cambiar el turno antes de guardar.'}</small>}</label>
-        <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>Automático según la última carga del equipo.</small></label>
+        <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>Automático según la última carga del equipo en {currentProject}.</small></label>
         <label>Horómetro inicial *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último horómetro final conocido.</small></label>
         <label>Horómetro final *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El horómetro final no puede ser menor que el inicial.</small>}</label>
         <label>Horas *<input className="locked" type="number" step="1" readOnly value={form['Cant. Hs.'] ?? ''} /></label>
@@ -466,7 +531,7 @@ export default function App() {
     {tab === 'pending' && <section className="card">
       <div className="row"><h2>Pendientes</h2><button className="secondary" disabled={syncing} onClick={() => sync(true)}>{syncing ? 'Sincronizando…' : 'Sincronizar ahora'}</button></div>
       {msg && <div className="notice">{msg}</div>}
-      {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Operador}</span><span>{p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ' · Guardado en este dispositivo'}</small></article>)}
+      {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Operador}</span><span>{p.payload.Proyecto} · {p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ' · Guardado en este dispositivo'}</small></article>)}
     </section>}
 
     {tab === 'receipts' && <Receipts operators={data.operadores} defaultOperator={lastOperator} />}
@@ -538,7 +603,7 @@ function Receipts({ operators, defaultOperator }: { operators: string[], default
 
   return <section className="card">
     <h2>Comprobantes de carga</h2>
-    <p>Seleccioná un operador. Los comprobantes se consultan directamente desde la planilla y pueden verse desde cualquier dispositivo.</p>
+    <p>Seleccioná un operador. Los comprobantes se consultan directamente desde las planillas R_OP02_JM y R_OP02_FS.</p>
 
     <label>Operador
       <select value={operator} onChange={e => setOperator(e.target.value)}>
@@ -555,7 +620,7 @@ function Receipts({ operators, defaultOperator }: { operators: string[], default
     {!operator ? <p>Elegí un operador para ver sus cargas confirmadas.</p> : loading ? <p>Consultando la planilla…</p> : rows.length === 0 && !error ? <p>No hay cargas confirmadas para este operador.</p> : rows.map(row => <article className="item" key={`${row.id}-${row.codigo}`}>
       <b>{row.operador}</b>
       <span>{row.interno} · {row.equipo}</span>
-      <span>{formatDate(row.fecha)} · Parte {row.parte ?? 's/ref'} · HI {row.hi ?? '-'} → HF {row.hf ?? '-'}</span>
+      <span>{formatDate(row.fecha)} · {row.proyecto} · Parte {row.parte ?? 's/ref'} · HI {row.hi ?? '-'} → HF {row.hf ?? '-'}</span>
       <small>✓ CONFIRMADO EN PLANILLA</small>
       <small>Comprobante: {row.codigo}</small>
       <button className="secondary" type="button" onClick={() => copyReceipt(row)}>COPIAR COMPROBANTE</button>
