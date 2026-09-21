@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
-import { checkRecord, createRecord, getBootstrap, getReceipts, type ReceiptRecord } from './api'
+import { checkRecord, createRecord, getBootstrap, getBootstrapLive, getReceipts, type ReceiptRecord } from './api'
 import { db } from './db'
 import { calcHours, estadoTexto, provisionalReference, tasksForEquipment } from './lib/business'
 import SignaturePad from './components/SignaturePad'
@@ -176,7 +176,24 @@ export default function App() {
   const hfTooLow = form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro final'] < form['Horómetro inicial']
   const set = (k: keyof Rop02Record, v: any) => setForm(f => ({ ...f, [k]: v }))
 
-  const chooseInterno = (v: string) => {
+  const refreshReference = async (interno: string) => {
+    if (!data || !interno) return null
+    const localPending = pending
+      .filter(p => p.payload.Interno === interno)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .at(-1)
+
+    if (localPending || !navigator.onLine) {
+      return provisionalReference(interno, data.equipmentState, pending)
+    }
+
+    const fresh = await getBootstrapLive()
+    setData(fresh)
+    await db.catalogs.put({ key: 'bootstrap', value: fresh })
+    return provisionalReference(interno, fresh.equipmentState, pending)
+  }
+
+  const chooseInterno = async (v: string) => {
     if (!data) return
     const eq = data.equipos.find(e => e.id === v)
     const ref = provisionalReference(v, data.equipmentState, pending)
@@ -187,16 +204,64 @@ export default function App() {
       'Tarea 1': '', 'Tarea 2': '', 'Observaciones 1': '', 'Observaciones 2': '', 'OD o FS': ''
     }))
     setMsg('')
+
+    if (!v) return
+    try {
+      const freshRef = await refreshReference(v)
+      if (!freshRef) return
+      setForm(f => f.Interno === v ? {
+        ...f,
+        'N° Parte': freshRef.parte,
+        'Horómetro inicial': freshRef.hi,
+        'Horómetro final': null,
+        'Cant. Hs.': null,
+        'Turno de trabajo': 'TURNO DIA'
+      } : f)
+      if (freshRef.turnoAnterior === 'TURNO NOCHE') {
+        setMsg(`El último registro de ${v} es TURNO NOCHE. El próximo registro debe ser TURNO DIA; no se permitirá cargar otro TURNO NOCHE.`)
+      }
+    } catch {
+      if (navigator.onLine) setMsg('No se pudo verificar en este momento el último turno del equipo. Se volverá a controlar antes de aceptar un TURNO NOCHE.')
+    }
   }
 
-  const chooseTurno = (v: string) => {
-    if (v === 'TURNO NOCHE' && !nightAllowed) {
-      setMsg(`No se puede cargar TURNO NOCHE${form.Interno ? ` para ${form.Interno}` : ''}. El registro anterior debe ser TURNO DIA${previousShift ? ` y actualmente figura como ${previousShift}` : ''}.`)
+  const chooseTurno = async (v: string) => {
+    if (v !== 'TURNO NOCHE') {
+      setMsg('')
+      set('Turno de trabajo', v)
+      return
+    }
+
+    if (!form.Interno) {
+      const message = 'Primero seleccioná un equipo antes de elegir TURNO NOCHE.'
+      setMsg(message)
+      window.alert(message)
       set('Turno de trabajo', 'TURNO DIA')
       return
     }
+
+    let ref = shiftRef
+    try {
+      ref = await refreshReference(form.Interno)
+    } catch {
+      const message = `No se pudo verificar el último turno de ${form.Interno} en la planilla. Por seguridad, TURNO NOCHE no fue habilitado.`
+      setMsg(message)
+      window.alert(message)
+      set('Turno de trabajo', 'TURNO DIA')
+      return
+    }
+
+    if (ref?.turnoAnterior !== 'TURNO DIA') {
+      const anterior = ref?.turnoAnterior || 'sin turno previo informado'
+      const message = `No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`
+      setMsg(message)
+      window.alert(message)
+      set('Turno de trabajo', 'TURNO DIA')
+      return
+    }
+
     setMsg('')
-    set('Turno de trabajo', v)
+    set('Turno de trabajo', 'TURNO NOCHE')
   }
 
   const chooseEstado = (v: EstadoEquipo) => {
@@ -267,9 +332,17 @@ export default function App() {
         throw new Error(`Faltan completar los siguientes campos obligatorios: ${missing.join(', ')}.`)
       }
 
-      if (form['Turno de trabajo'] === 'TURNO NOCHE' && shiftRef?.turnoAnterior !== 'TURNO DIA') {
-        const anterior = shiftRef?.turnoAnterior || 'sin turno previo informado'
-        throw new Error(`No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`)
+      if (form['Turno de trabajo'] === 'TURNO NOCHE') {
+        let latestRef = shiftRef
+        try {
+          latestRef = await refreshReference(form.Interno)
+        } catch {
+          throw new Error(`No se pudo verificar el último turno de ${form.Interno} en la planilla. TURNO NOCHE no puede guardarse hasta poder verificarlo.`)
+        }
+        if (latestRef?.turnoAnterior !== 'TURNO DIA') {
+          const anterior = latestRef?.turnoAnterior || 'sin turno previo informado'
+          throw new Error(`No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`)
+        }
       }
 
       schema.parse(form)
@@ -347,7 +420,7 @@ export default function App() {
         <h2 className="sectionTitle wide">DATOS DEL EQUIPO</h2>
         <label>Interno *<select required value={form.Interno} onChange={e => chooseInterno(e.target.value)}><option value="">Seleccionar…</option>{data.equipos.map(e => <option key={e.id} value={e.id}>{e.id}</option>)}</select></label>
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
-        <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => chooseTurno(e.target.value)}><option>TURNO DIA</option><option disabled={!nightAllowed}>TURNO NOCHE</option></select>{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && 'El turno noche requiere un turno día inmediatamente anterior.'}</small>}</label>
+        <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => chooseTurno(e.target.value)}><option>TURNO DIA</option><option>TURNO NOCHE</option></select>{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}</small>}</label>
         <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>Automático según la última carga del equipo.</small></label>
         <label>Horómetro inicial *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último horómetro final conocido.</small></label>
         <label>Horómetro final *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El horómetro final no puede ser menor que el inicial.</small>}</label>
