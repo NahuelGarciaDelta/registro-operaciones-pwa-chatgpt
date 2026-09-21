@@ -60,6 +60,7 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: ['app-icon.svg'],
         manifest: {
+          id: '/',
           name: 'DELTA MINING · Registro de Operaciones',
           short_name: 'ROP02 DELTA',
           description: 'Registro offline de operaciones de equipos',
