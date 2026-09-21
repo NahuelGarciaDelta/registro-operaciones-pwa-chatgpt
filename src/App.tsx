@@ -220,19 +220,43 @@ export default function App() {
       if (form['N° Parte'] == null || form['Horómetro inicial'] == null) {
         throw new Error('Este equipo no tiene una referencia previa de N° Parte u Horómetro inicial en la planilla. Debe cargarse una referencia antes de usar el formulario.')
       }
+
       const zeroHours = form['Horómetro final'] === form['Horómetro inicial']
-      if (zeroHours && !form['OD o FS']) throw new Error('Como el horómetro inicial y final son iguales, seleccioná OD, FS o EM.')
+      const missing: string[] = []
+      const requireField = (label: string, value: unknown) => {
+        if (value == null || (typeof value === 'string' && !value.trim())) missing.push(label)
+      }
+
+      requireField('Fecha', form.Fecha)
+      requireField('Operador', form.Operador)
+      requireField('Supervisor Delta', form['Supervisor Delta'])
+      requireField('Supervisor Vial Cliente', form['Supervisor Vial Cliente'])
+      requireField('Proyecto', form.Proyecto)
+      requireField('Área', form['Area de trabajo'])
+      requireField('Interno', form.Interno)
+      requireField('Turno', form['Turno de trabajo'])
+      requireField('Horómetro final', form['Horómetro final'])
+      requireField('Cambio de tareas', form['Cambio de tareas planificadas'])
+      requireField('Desgaste', form['Información sobre Desgaste'])
+      requireField('Combustible', form.Combustible)
+      requireField('Aceite', form.Aceite)
+
+      if (zeroHours) {
+        requireField('OD / FS / EM', form['OD o FS'])
+      } else {
+        requireField('Tarea 1', form['Tarea 1'])
+        requireField('Observaciones 1', form['Observaciones 1'])
+      }
+
+      if (!sig) missing.push('Firma')
+
+      if (missing.length) {
+        throw new Error(`Faltan completar los siguientes campos obligatorios: ${missing.join(', ')}.`)
+      }
+
       schema.parse(form)
       if ((form['Horómetro final'] ?? 0) < form['Horómetro inicial']) throw new Error('El horómetro final no puede ser menor al inicial.')
-      if (!form['Supervisor Vial Cliente'].trim()) throw new Error('Supervisor Vial Cliente es obligatorio.')
-      if (!form['Area de trabajo'].trim()) throw new Error('Área es obligatoria.')
-      if (!form['Cambio de tareas planificadas'].trim()) throw new Error('Cambio de tareas es obligatorio.')
-      if (!form['Información sobre Desgaste'].trim()) throw new Error('Desgaste es obligatorio.')
-      if (!form.Combustible.trim()) throw new Error('Combustible es obligatorio.')
-      if (!form.Aceite.trim()) throw new Error('Aceite es obligatorio.')
-      if (!form['Tarea 1'].trim()) throw new Error('Tarea 1 es obligatoria.')
-      if (!form['Observaciones 1'].trim()) throw new Error('Observaciones 1 es obligatoria.')
-      if (!sig) throw new Error('La firma es obligatoria.')
+
       const item: PendingRecord = {
         id: form.ID, payload: form, signatureDataUrl: sig,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -246,7 +270,32 @@ export default function App() {
       await reloadPending()
       if (navigator.onLine) await sync(false)
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Revisá los campos obligatorios.')
+      if (e instanceof z.ZodError) {
+        const labels: Record<string, string> = {
+          Fecha: 'Fecha',
+          Interno: 'Interno',
+          Equipo: 'Equipo',
+          Operador: 'Operador',
+          'Supervisor Delta': 'Supervisor Delta',
+          'Supervisor Vial Cliente': 'Supervisor Vial Cliente',
+          'Turno de trabajo': 'Turno',
+          'N° Parte': 'N° Parte',
+          Proyecto: 'Proyecto',
+          'Area de trabajo': 'Área',
+          'Horómetro inicial': 'Horómetro inicial',
+          'Horómetro final': 'Horómetro final',
+          'Cambio de tareas planificadas': 'Cambio de tareas',
+          'Información sobre Desgaste': 'Desgaste',
+          Combustible: 'Combustible',
+          Aceite: 'Aceite',
+          'Tarea 1': 'Tarea 1',
+          'Observaciones 1': 'Observaciones 1'
+        }
+        const fields = [...new Set(e.issues.map(issue => labels[String(issue.path[0])] || String(issue.path[0])).filter(Boolean))]
+        setMsg(`Revisá los siguientes campos obligatorios: ${fields.join(', ')}.`)
+      } else {
+        setMsg(e instanceof Error ? e.message : 'Revisá los campos obligatorios.')
+      }
     }
   }
 
