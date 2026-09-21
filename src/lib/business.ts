@@ -10,19 +10,23 @@ export const estadoTexto = (estado: EstadoEquipo): string => {
 export const tasksForEquipment = (tasks: Task[], equipo: string) => tasks.filter(t => t.tipoEquipo === equipo)
 
 export function provisionalReference(interno: string, states: EquipmentState[], pending: PendingRecord[]) {
+  const server = states.find(s => s.interno === interno)
   const local = pending
     .filter(p => p.payload.Interno === interno)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .at(-1)?.payload
+
   if (local) {
     return {
       parte: local['N° Parte'] == null ? null : local['N° Parte'] + 1,
       hi: local['Horómetro final'],
-      turnoAnterior: local['Turno de trabajo'] || null,
+      // Para autorizar TURNO NOCHE manda siempre el último turno confirmado en la planilla.
+      // Un pendiente local nunca habilita otro TURNO NOCHE.
+      turnoAnterior: server?.ultimoTurno ?? null,
       source: 'local' as const
     }
   }
-  const server = states.find(s => s.interno === interno)
+
   return {
     parte: server?.ultimoNumeroParte == null ? null : server.ultimoNumeroParte + 1,
     hi: server?.ultimoHorometroFinal ?? null,
