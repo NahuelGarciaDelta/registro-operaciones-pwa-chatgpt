@@ -41,10 +41,6 @@ function setupProject() {
   return result;
 }
 
-/**
- * Ejecutar manualmente si ya había filas con fechas guardadas como texto yyyy-MM-dd.
- * Convierte las fechas reconocibles a fecha real y aplica dd/MM/yyyy a toda la columna.
- */
 function normalizeDateColumn() {
   const changed = normalizeDateColumn_();
   console.log('Fechas normalizadas: ' + changed);
@@ -146,6 +142,7 @@ function bootstrap_() {
     const fecha = dateISO_(r[h['Fecha']]);
     const part = num_(r[h['N° Parte']]);
     const hf = num_(r[h['Horómetro final']]);
+    const turno = clean_(r[h['Turno de trabajo']]);
 
     const area = clean_(r[h['Area de trabajo']]);
     if (area) fallbackAreas[area] = 1;
@@ -154,7 +151,14 @@ function bootstrap_() {
 
     const prev = states[interno];
     if (!prev || fecha > prev.fechaUltimoRegistro || (fecha === prev.fechaUltimoRegistro && i > prev._i)) {
-      states[interno] = { interno, ultimoNumeroParte: part, ultimoHorometroFinal: hf, fechaUltimoRegistro: fecha, _i: i };
+      states[interno] = {
+        interno,
+        ultimoNumeroParte: part,
+        ultimoHorometroFinal: hf,
+        fechaUltimoRegistro: fecha,
+        ultimoTurno: turno || null,
+        _i: i
+      };
     }
   });
 
@@ -235,13 +239,29 @@ function createRecord_(body) {
       const rf = dateISO_(r[h['Fecha']]);
       if (!rf || rf > fecha) continue;
       if (!best || rf > best.fecha || (rf === best.fecha && i > best.i)) {
-        best = { fecha: rf, i, part: num_(r[h['N° Parte']]), hf: num_(r[h['Horómetro final']]) };
+        best = {
+          fecha: rf,
+          i,
+          part: num_(r[h['N° Parte']]),
+          hf: num_(r[h['Horómetro final']]),
+          turno: clean_(r[h['Turno de trabajo']])
+        };
       }
     }
 
     if (!best || best.part == null || best.hf == null) {
       throw new Error('No existe una referencia previa válida de N° Parte y Horómetro final para ' + interno + '.');
     }
+
+    const turno = clean_(p['Turno de trabajo']);
+    if (['TURNO DIA', 'TURNO NOCHE'].indexOf(turno) === -1) {
+      throw new Error('Turno inválido. Debe ser TURNO DIA o TURNO NOCHE.');
+    }
+    if (turno === 'TURNO NOCHE' && best.turno !== 'TURNO DIA') {
+      const anterior = best.turno || 'sin turno informado';
+      throw new Error('No se puede cargar TURNO NOCHE para ' + interno + '. El registro anterior debe ser TURNO DIA y actualmente figura como ' + anterior + '.');
+    }
+    p['Turno de trabajo'] = turno;
 
     p['N° Parte'] = best.part + 1;
     p['Horómetro inicial'] = best.hf;
