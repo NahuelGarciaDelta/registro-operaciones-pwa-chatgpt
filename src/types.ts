@@ -2,7 +2,13 @@ export type EstadoEquipo = '' | 'OD' | 'FS' | 'EM'
 
 export interface Equipment { id: string; equipo: string }
 export interface Task { id: string; tipoEquipo: string; tarea: string }
-export interface EquipmentState { interno: string; ultimoNumeroParte: number | null; ultimoHorometroFinal: number | null; fechaUltimoRegistro: string | null }
+export interface EquipmentState {
+  interno: string
+  ultimoNumeroParte: number | null
+  ultimoHorometroFinal: number | null
+  fechaUltimoRegistro: string | null
+  ultimoTurno: string | null
+}
 export interface BootstrapData {
   generatedFrom?: string
   generatedAt?: string
