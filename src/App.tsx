@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
-import { checkRecord, createRecord, getBootstrap } from './api'
+import { checkRecord, createRecord, getBootstrap, getReceipts, type ReceiptRecord } from './api'
 import { db } from './db'
 import { calcHours, estadoTexto, provisionalReference, tasksForEquipment } from './lib/business'
 import SignaturePad from './components/SignaturePad'
@@ -41,22 +41,9 @@ const blank = (project = 'JOSE MARIA'): Rop02Record => ({
   'Observaciones 2': '', 'Cambio de tareas planificadas': 'Sin cambio de tareas planificadas'
 })
 
-const receiptCode = (id: string, interno: string, parte: number | null) => {
-  const shortId = id.replace(/-/g, '').slice(0, 6).toUpperCase()
-  const compactInternal = interno.replace(/[^A-Za-z0-9]/g, '')
-  return `ROP02-${compactInternal}-${parte ?? 'SREF'}-${shortId}`
-}
-
-const formatDateTime = (iso: string) => {
-  try {
-    return new Intl.DateTimeFormat('es-AR', {
-      timeZone: 'America/Argentina/San_Juan',
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit'
-    }).format(new Date(iso))
-  } catch {
-    return iso
-  }
+const formatDate = (iso: string) => {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso
 }
 
 export default function App() {
@@ -68,6 +55,7 @@ export default function App() {
   const [msg, setMsg] = useState('')
   const [tab, setTab] = useState<'form' | 'pending' | 'receipts'>('form')
   const [syncing, setSyncing] = useState(false)
+  const [lastOperator, setLastOperator] = useState('')
   const syncInFlight = useRef(false)
 
   const reloadPending = async () => setPending(await db.syncQueue.orderBy('createdAt').toArray())
@@ -110,12 +98,7 @@ export default function App() {
             definitive = recovered
           }
 
-          // Una carga confirmada por Sheets pasa a Comprobantes antes de salir de Pendientes.
-          await db.syncedRecords.put({
-            id: item.id,
-            payload: definitive,
-            syncedAt: new Date().toISOString()
-          })
+          void definitive
           await db.syncQueue.delete(item.id)
           ok++
         } catch (e) {
@@ -146,7 +129,7 @@ export default function App() {
 
     if (showResult) {
       if (errors) setMsg(`No se pudo sincronizar ${errors} carga(s). ${lastError}`)
-      else if (ok) setMsg(`${ok} carga(s) sincronizada(s) correctamente. El comprobante quedó disponible.`)
+      else if (ok) setMsg(`${ok} carga(s) sincronizada(s) correctamente. Ya puede consultarse el comprobante desde cualquier dispositivo.`)
       else setMsg('No hay cargas pendientes de sincronización.')
     }
   }, [])
@@ -171,6 +154,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Los comprobantes ahora se consultan directamente desde Google Sheets.
+    // Limpiamos el historial local de versiones anteriores para no generar confusión.
+    db.syncedRecords.clear().catch(() => undefined)
     load()
     const on = () => { setOnline(true); sync() }
     const off = () => setOnline(false)
@@ -253,6 +239,7 @@ export default function App() {
         syncStatus: 'pending', syncAttempts: 0
       }
       await db.syncQueue.put(item)
+      setLastOperator(form.Operador)
       setMsg('Registro guardado en el dispositivo. Hasta que se sincronice aparecerá en Pendientes.')
       setSig(undefined)
       setForm(blank(form.Proyecto || 'JOSE MARIA'))
@@ -264,7 +251,6 @@ export default function App() {
   }
 
   if (!data) return <main className="shell"><div className="card"><h1>DELTA MINING</h1><p>Preparando datos…</p><p>La primera apertura requiere internet.</p></div></main>
-  const receiptsPromise = () => db.syncedRecords.orderBy('syncedAt').reverse().limit(100).toArray()
 
   return <main className="shell">
     <header>
@@ -285,7 +271,7 @@ export default function App() {
         <p className="requiredNote wide">* Campos obligatorios</p>
         <h2 className="sectionTitle wide">DATOS</h2>
         <label>Fecha *<input required type="date" value={form.Fecha} onChange={e => set('Fecha', e.target.value)} /></label>
-        <label>Operador *<select required value={form.Operador} onChange={e => set('Operador', e.target.value)}><option value="">Seleccionar…</option>{data.operadores.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
+        <label>Operador *<select required value={form.Operador} onChange={e => { set('Operador', e.target.value); setLastOperator(e.target.value) }}><option value="">Seleccionar…</option>{data.operadores.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
         <label>Supervisor Delta *<select required value={form['Supervisor Delta']} onChange={e => set('Supervisor Delta', e.target.value)}><option value="">Seleccionar…</option>{data.supervisoresDelta.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
         <label>Supervisor Vial Cliente *<select required value={form['Supervisor Vial Cliente']} onChange={e => set('Supervisor Vial Cliente', e.target.value)}><option value="">Seleccionar…</option>{data.supervisoresCliente.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
         <label>Proyecto *<select required value={form.Proyecto} onChange={e => set('Proyecto', e.target.value)}><option value="JOSE MARIA">JOSÉ MARÍA</option><option value="FILO DEL SOL">FILO DEL SOL</option></select></label>
@@ -327,34 +313,64 @@ export default function App() {
       {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Operador}</span><span>{p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ' · Guardado en este dispositivo'}</small></article>)}
     </section>}
 
-    {tab === 'receipts' && <Receipts load={receiptsPromise} />}
+    {tab === 'receipts' && <Receipts operators={data.operadores} defaultOperator={lastOperator} />}
   </main>
 }
 
-function Receipts({ load }: { load: () => Promise<any[]> }) {
-  const [rows, setRows] = useState<any[]>([])
+function Receipts({ operators, defaultOperator }: { operators: string[], defaultOperator: string }) {
+  const [operator, setOperator] = useState(defaultOperator)
+  const [rows, setRows] = useState<ReceiptRecord[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    if (!operator) {
+      setRows([])
+      setError('')
+      return
+    }
+    if (!navigator.onLine) {
+      setRows([])
+      setError('Necesitás conexión para consultar comprobantes confirmados en la planilla.')
+      return
+    }
+
+    setLoading(true)
+    setError('')
+    try {
+      setRows(await getReceipts(operator))
+    } catch (e) {
+      setRows([])
+      setError(e instanceof Error ? e.message : 'No se pudieron consultar los comprobantes.')
+    } finally {
+      setLoading(false)
+    }
+  }, [operator])
 
   useEffect(() => {
-    load().then(setRows)
-  }, [load])
+    if (operator) load()
+  }, [operator, load])
 
-  const copyReceipt = async (row: any) => {
-    const p = row.payload as Rop02Record
-    const code = receiptCode(row.id, p.Interno, p['N° Parte'])
+  const copyReceipt = async (row: ReceiptRecord) => {
     const text = [
       'DELTA MINING - COMPROBANTE ROP02',
-      `Código: ${code}`,
-      `Estado: SINCRONIZADO`,
-      `Operador: ${p.Operador}`,
-      `Fecha: ${p.Fecha}`,
-      `Interno: ${p.Interno}`,
-      `Equipo: ${p.Equipo}`,
-      `Parte: ${p['N° Parte'] ?? ''}`,
-      `HI: ${p['Horómetro inicial'] ?? ''}`,
-      `HF: ${p['Horómetro final'] ?? ''}`,
-      `Horas: ${p['Cant. Hs.'] ?? ''}`,
-      `Sincronizado: ${formatDateTime(row.syncedAt)}`
-    ].join('\n')
+      `Código: ${row.codigo}`,
+      'Estado: CONFIRMADO EN PLANILLA',
+      `Operador: ${row.operador}`,
+      `Fecha: ${formatDate(row.fecha)}`,
+      `Interno: ${row.interno}`,
+      `Equipo: ${row.equipo}`,
+      `Turno: ${row.turno}`,
+      `Proyecto: ${row.proyecto}`,
+      `Área: ${row.area}`,
+      `Parte: ${row.parte ?? ''}`,
+      `HI: ${row.hi ?? ''}`,
+      `HF: ${row.hf ?? ''}`,
+      `Horas: ${row.horas ?? ''}`,
+      row.estado ? `Estado equipo: ${row.estado}` : '',
+      'Fuente: Google Sheets - Registro para operarios'
+    ].filter(Boolean).join('\n')
+
     try {
       await navigator.clipboard.writeText(text)
     } catch {
@@ -362,20 +378,31 @@ function Receipts({ load }: { load: () => Promise<any[]> }) {
     }
   }
 
+  const sortedOperators = useMemo(() => [...operators].sort((a, b) => a.localeCompare(b, 'es')), [operators])
+
   return <section className="card">
     <h2>Comprobantes de carga</h2>
-    <p>Estas cargas fueron confirmadas por la planilla. El código sirve como constancia de la carga realizada.</p>
-    {rows.length === 0 ? <p>Todavía no hay comprobantes en este dispositivo.</p> : rows.map(row => {
-      const p = row.payload as Rop02Record
-      const code = receiptCode(row.id, p.Interno, p['N° Parte'])
-      return <article className="item" key={row.id}>
-        <b>{p.Operador}</b>
-        <span>{p.Interno} · {p.Equipo}</span>
-        <span>{p.Fecha} · Parte {p['N° Parte'] ?? 's/ref'} · HI {p['Horómetro inicial'] ?? '-'} → HF {p['Horómetro final'] ?? '-'}</span>
-        <small>✓ SINCRONIZADO · {formatDateTime(row.syncedAt)}</small>
-        <small>Comprobante: {code}</small>
-        <button className="secondary" type="button" onClick={() => copyReceipt(row)}>COPIAR COMPROBANTE</button>
-      </article>
-    })}
+    <p>Seleccioná un operador. Los comprobantes se consultan directamente desde la planilla y pueden verse desde cualquier dispositivo.</p>
+
+    <label>Operador
+      <select value={operator} onChange={e => setOperator(e.target.value)}>
+        <option value="">Seleccionar operador…</option>
+        {sortedOperators.map(x => <option key={x} value={x}>{x}</option>)}
+      </select>
+    </label>
+
+    <div className="formToolbar">
+      <button className="secondary" type="button" disabled={!operator || loading} onClick={load}>{loading ? 'CONSULTANDO…' : 'ACTUALIZAR COMPROBANTES'}</button>
+    </div>
+
+    {error && <div className="notice">{error}</div>}
+    {!operator ? <p>Elegí un operador para ver sus cargas confirmadas.</p> : loading ? <p>Consultando la planilla…</p> : rows.length === 0 && !error ? <p>No hay cargas confirmadas para este operador.</p> : rows.map(row => <article className="item" key={`${row.id}-${row.codigo}`}>
+      <b>{row.operador}</b>
+      <span>{row.interno} · {row.equipo}</span>
+      <span>{formatDate(row.fecha)} · Parte {row.parte ?? 's/ref'} · HI {row.hi ?? '-'} → HF {row.hf ?? '-'}</span>
+      <small>✓ CONFIRMADO EN PLANILLA</small>
+      <small>Comprobante: {row.codigo}</small>
+      <button className="secondary" type="button" onClick={() => copyReceipt(row)}>COPIAR COMPROBANTE</button>
+    </article>)}
   </section>
 }
