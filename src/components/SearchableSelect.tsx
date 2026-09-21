@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 
+export type SearchableOption = string | { value: string; label: string }
+
 type Props = {
   value: string
-  options: string[]
+  options: SearchableOption[]
   onChange: (value: string) => void
   placeholder?: string
   required?: boolean
@@ -16,6 +18,10 @@ const normalize = (value: string) => value
   .toLocaleLowerCase('es')
   .trim()
 
+const toOption = (option: SearchableOption) => typeof option === 'string'
+  ? { value: option, label: option }
+  : option
+
 export default function SearchableSelect({
   value,
   options,
@@ -25,33 +31,44 @@ export default function SearchableSelect({
   disabled = false,
   emptyText = 'Sin coincidencias'
 }: Props) {
-  const [query, setQuery] = useState(value)
+  const normalizedOptions = useMemo(() => {
+    const seen = new Set<string>()
+    return options
+      .map(toOption)
+      .filter(option => option.value && !seen.has(option.value) && seen.add(option.value))
+  }, [options])
+
+  const selectedLabel = normalizedOptions.find(option => option.value === value)?.label || value
+  const [query, setQuery] = useState(selectedLabel)
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
-    if (!open) setQuery(value)
-  }, [value, open])
+    if (!open) setQuery(selectedLabel)
+  }, [selectedLabel, open])
 
   const filtered = useMemo(() => {
     const q = normalize(query)
-    const source = [...new Set(options.filter(Boolean))]
-    if (!q) return source.slice(0, 60)
-    return source.filter(option => normalize(option).includes(q)).slice(0, 60)
-  }, [options, query])
+    if (!q) return normalizedOptions.slice(0, 60)
+    return normalizedOptions
+      .filter(option => normalize(option.label).includes(q) || normalize(option.value).includes(q))
+      .slice(0, 60)
+  }, [normalizedOptions, query])
 
-  const select = (option: string) => {
-    setQuery(option)
+  const select = (option: { value: string; label: string }) => {
+    setQuery(option.label)
     setOpen(false)
-    onChange(option)
+    onChange(option.value)
   }
 
   const finishTyping = () => {
-    const exact = options.find(option => normalize(option) === normalize(query))
+    const exact = normalizedOptions.find(option =>
+      normalize(option.label) === normalize(query) || normalize(option.value) === normalize(query)
+    )
     if (exact) {
       select(exact)
       return
     }
-    setQuery(value)
+    setQuery(selectedLabel)
     setOpen(false)
   }
 
@@ -76,7 +93,7 @@ export default function SearchableSelect({
           if (filtered.length) select(filtered[0])
         }
         if (e.key === 'Escape') {
-          setQuery(value)
+          setQuery(selectedLabel)
           setOpen(false)
         }
       }}
@@ -85,12 +102,12 @@ export default function SearchableSelect({
     {!disabled && <span className="searchChevron" aria-hidden="true">⌄</span>}
     {open && !disabled && <div className="searchDropdown">
       {filtered.length ? filtered.map(option => <button
-        key={option}
+        key={option.value}
         type="button"
-        className={option === value ? 'searchOption selected' : 'searchOption'}
+        className={option.value === value ? 'searchOption selected' : 'searchOption'}
         onMouseDown={e => e.preventDefault()}
         onClick={() => select(option)}
-      >{option}</button>) : <div className="searchEmpty">{emptyText}</div>}
+      >{option.label}</button>) : <div className="searchEmpty">{emptyText}</div>}
     </div>}
   </div>
 }
