@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
-import { createRecord, getBootstrap } from './api'
+import { checkRecord, createRecord, getBootstrap } from './api'
 import { db } from './db'
 import { calcHours, estadoTexto, provisionalReference, tasksForEquipment } from './lib/business'
 import SignaturePad from './components/SignaturePad'
@@ -50,6 +50,7 @@ export default function App() {
   const [msg, setMsg] = useState('')
   const [tab, setTab] = useState<'form' | 'pending' | 'history'>('form')
   const [syncing, setSyncing] = useState(false)
+  const syncInFlight = useRef(false)
 
   const reloadPending = async () => setPending(await db.syncQueue.orderBy('createdAt').toArray())
 
@@ -58,33 +59,72 @@ export default function App() {
       if (showResult) setMsg('No hay conexión. Las cargas siguen guardadas en el dispositivo.')
       return
     }
+    if (syncInFlight.current) {
+      if (showResult) setMsg('Ya hay una sincronización en curso.')
+      return
+    }
+
+    syncInFlight.current = true
     setSyncing(true)
-    const q = await db.syncQueue.orderBy('createdAt').toArray()
     let ok = 0
     let errors = 0
     let lastError = ''
-    for (const item of q) {
-      try {
-        await db.syncQueue.update(item.id, { syncStatus: 'syncing', syncAttempts: item.syncAttempts + 1, lastSyncError: undefined })
-        const definitive = await createRecord(item)
-        await db.syncedRecords.put({ id: item.id, payload: definitive, syncedAt: new Date().toISOString() })
-        await db.syncQueue.delete(item.id)
-        ok++
-      } catch (e) {
-        errors++
-        lastError = e instanceof Error ? e.message : String(e)
-        await db.syncQueue.update(item.id, { syncStatus: 'error', lastSyncError: lastError })
+
+    try {
+      const q = await db.syncQueue.orderBy('createdAt').toArray()
+      for (const item of q) {
+        try {
+          const now = new Date().toISOString()
+          await db.syncQueue.update(item.id, {
+            syncStatus: 'syncing',
+            syncAttempts: item.syncAttempts + 1,
+            lastSyncError: undefined,
+            updatedAt: now
+          })
+          await reloadPending()
+
+          let definitive: Rop02Record
+          try {
+            definitive = await createRecord(item)
+          } catch (createError) {
+            // Puede ocurrir que Google Sheets haya guardado la fila pero se pierda la
+            // respuesta al celular (por cambio de red, timeout, cierre de pestaña, etc.).
+            // Antes de marcar error, verificamos por ID para no dejar un registro
+            // eternamente en "syncing" ni volver a insertarlo por duplicado.
+            const recovered = await checkRecord(item.id).catch(() => null)
+            if (!recovered) throw createError
+            definitive = recovered
+          }
+
+          await db.syncedRecords.put({ id: item.id, payload: definitive, syncedAt: new Date().toISOString() })
+          await db.syncQueue.delete(item.id)
+          ok++
+        } catch (e) {
+          errors++
+          lastError = e instanceof Error ? e.message : String(e)
+          await db.syncQueue.update(item.id, {
+            syncStatus: 'error',
+            lastSyncError: lastError,
+            updatedAt: new Date().toISOString()
+          })
+        } finally {
+          await reloadPending()
+        }
       }
+
+      if (ok > 0) {
+        try {
+          const fresh = await getBootstrap()
+          setData(fresh)
+          await db.catalogs.put({ key: 'bootstrap', value: fresh })
+        } catch { /* la carga ya quedó sincronizada; se refrescará después */ }
+      }
+    } finally {
+      syncInFlight.current = false
+      setSyncing(false)
+      await reloadPending()
     }
-    await reloadPending()
-    if (ok > 0) {
-      try {
-        const fresh = await getBootstrap()
-        setData(fresh)
-        await db.catalogs.put({ key: 'bootstrap', value: fresh })
-      } catch { /* la carga ya quedó sincronizada; se refrescará después */ }
-    }
-    setSyncing(false)
+
     if (showResult) {
       if (errors) setMsg(`No se pudo sincronizar ${errors} carga(s). ${lastError}`)
       else if (ok) setMsg(`${ok} carga(s) sincronizada(s) correctamente con la planilla.`)
@@ -151,7 +191,6 @@ export default function App() {
   }
 
   const changeHorometroFinal = (raw: string) => {
-    // Solo enteros positivos/cero. Evita decimales, signos y otros caracteres.
     if (raw !== '' && !/^\d+$/.test(raw)) return
     const hf = raw === '' ? null : Number(raw)
     setForm(f => {
