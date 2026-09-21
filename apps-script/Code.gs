@@ -41,10 +41,6 @@ function setupProject() {
   return result;
 }
 
-/**
- * Ejecutar manualmente si ya había filas con fechas guardadas como texto yyyy-MM-dd.
- * Convierte las fechas reconocibles a fecha real y aplica dd/MM/yyyy a toda la columna.
- */
 function normalizeDateColumn() {
   const changed = normalizeDateColumn_();
   console.log('Fechas normalizadas: ' + changed);
@@ -68,6 +64,7 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents || '{}');
     assertSecret_(body.secret);
     if (body.action === 'createRecord') return json_(createRecord_(body));
+    if (body.action === 'checkRecord') return json_(checkRecord_(body.id));
     throw new Error('Acción no válida');
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
@@ -193,6 +190,7 @@ function createRecord_(body) {
     if (!id) throw new Error('ID requerido');
 
     const idCol = h['ID'];
+    if (idCol === undefined) throw new Error('No existe la columna ID en ' + MAIN_SHEET + '.');
     for (let i = 1; i < values.length; i++) {
       if (clean_(values[i][idCol]) === id) {
         return { ok: true, duplicate: true, record: rowToRecord_(headers, values[i]) };
@@ -202,7 +200,6 @@ function createRecord_(body) {
     const p = Object.assign({}, body.payload || {});
     p.ID = id;
 
-    // Campos obligatorios editables. Tarea 2 y Observaciones 2 son opcionales.
     [
       'Fecha', 'Interno', 'Equipo', 'Operador', 'Supervisor Delta', 'Supervisor Vial Cliente',
       'Turno de trabajo', 'Proyecto', 'Area de trabajo', 'Cambio de tareas planificadas',
@@ -218,8 +215,6 @@ function createRecord_(body) {
     if (!fecha) throw new Error('Fecha inválida.');
     p.Fecha = fecha;
 
-    // Referencia autoritativa: último registro existente del mismo equipo hasta esa fecha.
-    // Si ya existe un registro del mismo día (ej. otro turno), toma el último de ese día.
     let best = null;
     for (let i = 1; i < values.length; i++) {
       const r = values[i];
@@ -235,7 +230,6 @@ function createRecord_(body) {
       throw new Error('No existe una referencia previa válida de N° Parte y Horómetro final para ' + interno + '.');
     }
 
-    // N° Parte y HI SIEMPRE los define el servidor; nunca se confía en el valor enviado por el celular.
     p['N° Parte'] = best.part + 1;
     p['Horómetro inicial'] = best.hf;
 
@@ -285,7 +279,6 @@ function createRecord_(body) {
     sheet.appendRow(row);
     const appendedRow = sheet.getLastRow();
 
-    // Escribe explícitamente una fecha real y fuerza el formato visual dd/MM/yyyy.
     if (h['Fecha'] !== undefined) {
       sheet.getRange(appendedRow, h['Fecha'] + 1)
         .setValue(dateObj)
@@ -301,6 +294,28 @@ function createRecord_(body) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function checkRecord_(rawId) {
+  const id = clean_(rawId);
+  if (!id) throw new Error('ID requerido');
+
+  const sheet = ss_().getSheetByName(MAIN_SHEET);
+  if (!sheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
+  const values = sheet.getDataRange().getValues();
+  if (!values.length) return { ok: true, found: false };
+
+  const headers = values[0];
+  const h = headerMap_(headers);
+  const idCol = h['ID'];
+  if (idCol === undefined) throw new Error('No existe la columna ID en ' + MAIN_SHEET + '.');
+
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (clean_(values[i][idCol]) === id) {
+      return { ok: true, found: true, record: rowToRecord_(headers, values[i]) };
+    }
+  }
+  return { ok: true, found: false };
 }
 
 function requireText_(obj, name) {
@@ -337,7 +352,6 @@ function int_(v) {
 function dateFromISO_(iso) {
   const value = dateISO_(iso);
   if (!value) throw new Error('Fecha inválida: ' + clean_(iso));
-  // Mediodía evita corrimientos de día por conversiones de zona horaria.
   return Utilities.parseDate(value + ' 12:00:00', TZ, 'yyyy-MM-dd HH:mm:ss');
 }
 
