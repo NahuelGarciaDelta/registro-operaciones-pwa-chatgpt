@@ -1,0 +1,32 @@
+import type { EstadoEquipo, EquipmentState, PendingRecord, Task } from '../types'
+
+export const estadoTexto = (estado: EstadoEquipo): string => {
+  if (estado === 'OD') return 'Equipo operativo a disposición'
+  if (estado === 'FS') return 'Equipo fuera de servicio'
+  if (estado === 'EM') return 'Equipo en mantenimiento programado'
+  return ''
+}
+
+export const tasksForEquipment = (tasks: Task[], equipo: string) => tasks.filter(t => t.tipoEquipo === equipo)
+
+export function provisionalReference(interno: string, states: EquipmentState[], pending: PendingRecord[]) {
+  const local = pending
+    .filter(p => p.payload.Interno === interno)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .at(-1)?.payload
+  if (local) {
+    return {
+      parte: local['N° Parte'] == null ? null : local['N° Parte'] + 1,
+      hi: local['Horómetro final'],
+      source: 'local' as const
+    }
+  }
+  const server = states.find(s => s.interno === interno)
+  return {
+    parte: server?.ultimoNumeroParte == null ? null : server.ultimoNumeroParte + 1,
+    hi: server?.ultimoHorometroFinal ?? null,
+    source: server ? 'sync' as const : 'none' as const
+  }
+}
+
+export const calcHours = (hi: number | null, hf: number | null) => hi == null || hf == null ? null : Number((hf - hi).toFixed(2))
