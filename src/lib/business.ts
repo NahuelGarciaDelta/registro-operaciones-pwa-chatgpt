@@ -9,10 +9,10 @@ export const estadoTexto = (estado: EstadoEquipo): string => {
 
 export const tasksForEquipment = (tasks: Task[], equipo: string) => tasks.filter(t => t.tipoEquipo === equipo)
 
-export function provisionalReference(interno: string, states: EquipmentState[], pending: PendingRecord[]) {
+export function provisionalReference(interno: string, states: EquipmentState[], pending: PendingRecord[], proyecto?: string) {
   const server = states.find(s => s.interno === interno)
   const local = pending
-    .filter(p => p.payload.Interno === interno)
+    .filter(p => p.payload.Interno === interno && (!proyecto || p.payload.Proyecto === proyecto))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .at(-1)?.payload
 
