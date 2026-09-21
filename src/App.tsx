@@ -56,6 +56,7 @@ export default function App() {
   const [tab, setTab] = useState<'form' | 'pending' | 'receipts'>('form')
   const [syncing, setSyncing] = useState(false)
   const [lastOperator, setLastOperator] = useState('')
+  const [turnoBlocked, setTurnoBlocked] = useState(false)
   const syncInFlight = useRef(false)
 
   const reloadPending = async () => setPending(await db.syncQueue.orderBy('createdAt').toArray())
@@ -173,6 +174,7 @@ export default function App() {
   const shiftRef = useMemo(() => form.Interno && data ? provisionalReference(form.Interno, data.equipmentState, pending) : null, [form.Interno, data, pending])
   const previousShift = shiftRef?.turnoAnterior || null
   const nightAllowed = previousShift === 'TURNO DIA'
+  const turnoSaveBlocked = form['Turno de trabajo'] === 'TURNO NOCHE' && (turnoBlocked || !nightAllowed)
   const hfTooLow = form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro final'] < form['Horómetro inicial']
   const set = (k: keyof Rop02Record, v: any) => setForm(f => ({ ...f, [k]: v }))
 
@@ -195,6 +197,7 @@ export default function App() {
 
   const chooseInterno = async (v: string) => {
     if (!data) return
+    setTurnoBlocked(false)
     const eq = data.equipos.find(e => e.id === v)
     const ref = provisionalReference(v, data.equipmentState, pending)
     setForm(f => ({
@@ -227,16 +230,21 @@ export default function App() {
 
   const chooseTurno = async (v: string) => {
     if (v !== 'TURNO NOCHE') {
+      setTurnoBlocked(false)
       setMsg('')
       set('Turno de trabajo', v)
       return
     }
 
+    // Mantener TURNO NOCHE seleccionado si es inválido. De esta forma el usuario
+    // debe cambiar explícitamente el turno y no puede guardar presionando nuevamente.
+    set('Turno de trabajo', 'TURNO NOCHE')
+
     if (!form.Interno) {
       const message = 'Primero seleccioná un equipo antes de elegir TURNO NOCHE.'
+      setTurnoBlocked(true)
       setMsg(message)
       window.alert(message)
-      set('Turno de trabajo', 'TURNO DIA')
       return
     }
 
@@ -245,23 +253,23 @@ export default function App() {
       ref = await refreshReference(form.Interno)
     } catch {
       const message = `No se pudo verificar el último turno de ${form.Interno} en la planilla. Por seguridad, TURNO NOCHE no fue habilitado.`
+      setTurnoBlocked(true)
       setMsg(message)
       window.alert(message)
-      set('Turno de trabajo', 'TURNO DIA')
       return
     }
 
     if (ref?.turnoAnterior !== 'TURNO DIA') {
       const anterior = ref?.turnoAnterior || 'sin turno previo informado'
       const message = `No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`
+      setTurnoBlocked(true)
       setMsg(message)
       window.alert(message)
-      set('Turno de trabajo', 'TURNO DIA')
       return
     }
 
+    setTurnoBlocked(false)
     setMsg('')
-    set('Turno de trabajo', 'TURNO NOCHE')
   }
 
   const chooseEstado = (v: EstadoEquipo) => {
@@ -295,6 +303,10 @@ export default function App() {
 
   const save = async () => {
     try {
+      if (turnoSaveBlocked) {
+        throw new Error(`No se puede guardar este registro mientras el turno sea TURNO NOCHE. Cambiá el turno a TURNO DIA para continuar.`)
+      }
+
       if (form['N° Parte'] == null || form['Horómetro inicial'] == null) {
         throw new Error('Este equipo no tiene una referencia previa de N° Parte u Horómetro inicial en la planilla. Debe cargarse una referencia antes de usar el formulario.')
       }
@@ -337,12 +349,15 @@ export default function App() {
         try {
           latestRef = await refreshReference(form.Interno)
         } catch {
+          setTurnoBlocked(true)
           throw new Error(`No se pudo verificar el último turno de ${form.Interno} en la planilla. TURNO NOCHE no puede guardarse hasta poder verificarlo.`)
         }
         if (latestRef?.turnoAnterior !== 'TURNO DIA') {
           const anterior = latestRef?.turnoAnterior || 'sin turno previo informado'
-          throw new Error(`No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`)
+          setTurnoBlocked(true)
+          throw new Error(`No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}. Cambiá el turno para continuar.`)
         }
+        setTurnoBlocked(false)
       }
 
       schema.parse(form)
@@ -357,6 +372,7 @@ export default function App() {
       setLastOperator(form.Operador)
       setMsg('Registro guardado en el dispositivo. Hasta que se sincronice aparecerá en Pendientes.')
       setSig(undefined)
+      setTurnoBlocked(false)
       setForm(blank(form.Proyecto || 'JOSE MARIA'))
       await reloadPending()
       if (navigator.onLine) await sync(false)
@@ -420,7 +436,7 @@ export default function App() {
         <h2 className="sectionTitle wide">DATOS DEL EQUIPO</h2>
         <label>Interno *<select required value={form.Interno} onChange={e => chooseInterno(e.target.value)}><option value="">Seleccionar…</option>{data.equipos.map(e => <option key={e.id} value={e.id}>{e.id}</option>)}</select></label>
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
-        <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => chooseTurno(e.target.value)}><option>TURNO DIA</option><option>TURNO NOCHE</option></select>{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}</small>}</label>
+        <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => chooseTurno(e.target.value)}><option>TURNO DIA</option><option>TURNO NOCHE</option></select>{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}{turnoSaveBlocked && ' Debés cambiar el turno antes de guardar.'}</small>}</label>
         <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>Automático según la última carga del equipo.</small></label>
         <label>Horómetro inicial *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último horómetro final conocido.</small></label>
         <label>Horómetro final *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El horómetro final no puede ser menor que el inicial.</small>}</label>
@@ -443,7 +459,7 @@ export default function App() {
         </>}
         <div className="wide"><label>Firma *</label><SignaturePad key={form.ID} onChange={setSig} /></div>
         {msg && <div className="notice wide">{msg}</div>}
-        <button className="primary wide" disabled={hfTooLow} onClick={save}>GUARDAR REGISTRO</button>
+        <button className="primary wide" disabled={hfTooLow || turnoSaveBlocked} onClick={save}>GUARDAR REGISTRO</button>
       </section>
     </>}
 
