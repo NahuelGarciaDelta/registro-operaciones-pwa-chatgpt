@@ -50,11 +50,14 @@ async function jsonOrThrow(r: Response) {
   return data
 }
 
+export async function getBootstrapLive(): Promise<BootstrapData> {
+  const r = await fetchWithTimeout(`${base}?action=bootstrap&_=${Date.now()}`, { cache: 'no-store' }, CHECK_TIMEOUT_MS)
+  return await jsonOrThrow(r)
+}
+
 export async function getBootstrap(): Promise<BootstrapData> {
   try {
-    const r = await fetchWithTimeout(`${base}?action=bootstrap`, { cache: 'no-store' }, CHECK_TIMEOUT_MS)
-    const data = await jsonOrThrow(r)
-    return data
+    return await getBootstrapLive()
   } catch {
     const r = await fetch(`/bootstrap.json?v=${Date.now()}`, { cache: 'no-store' })
     if (!r.ok) throw new Error('No se pudieron cargar las listas de la planilla ni el respaldo local.')
