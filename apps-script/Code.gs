@@ -41,6 +41,10 @@ function setupProject() {
   return result;
 }
 
+/**
+ * Ejecutar manualmente si ya había filas con fechas guardadas como texto yyyy-MM-dd.
+ * Convierte las fechas reconocibles a fecha real y aplica dd/MM/yyyy a toda la columna.
+ */
 function normalizeDateColumn() {
   const changed = normalizeDateColumn_();
   console.log('Fechas normalizadas: ' + changed);
@@ -184,13 +188,13 @@ function createRecord_(body) {
     if (!sheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
     const values = sheet.getDataRange().getValues();
     const headers = values[0];
+    const idCol = ensureIdColumn_(sheet, headers);
+    headers[idCol] = 'ID';
     const h = headerMap_(headers);
 
     const id = clean_(body.id || (body.payload && body.payload.ID));
     if (!id) throw new Error('ID requerido');
 
-    const idCol = h['ID'];
-    if (idCol === undefined) throw new Error('No existe la columna ID en ' + MAIN_SHEET + '.');
     for (let i = 1; i < values.length; i++) {
       if (clean_(values[i][idCol]) === id) {
         return { ok: true, duplicate: true, record: rowToRecord_(headers, values[i]) };
@@ -199,6 +203,17 @@ function createRecord_(body) {
 
     const p = Object.assign({}, body.payload || {});
     p.ID = id;
+
+    // Compatibilidad con cargas realizadas mientras la columna ID no tenía encabezado.
+    // Si la fila ya llegó a Sheets pero el celular perdió la respuesta, la recuperamos
+    // por sus datos originales, escribimos el ID faltante y evitamos duplicarla.
+    const legacyMatch = findLegacyPendingRow_(values, h, p, idCol);
+    if (legacyMatch !== null) {
+      sheet.getRange(legacyMatch + 1, idCol + 1).setValue(id);
+      values[legacyMatch][idCol] = id;
+      SpreadsheetApp.flush();
+      return { ok: true, recoveredLegacy: true, record: rowToRecord_(headers, values[legacyMatch]) };
+    }
 
     [
       'Fecha', 'Interno', 'Equipo', 'Operador', 'Supervisor Delta', 'Supervisor Vial Cliente',
@@ -306,9 +321,8 @@ function checkRecord_(rawId) {
   if (!values.length) return { ok: true, found: false };
 
   const headers = values[0];
-  const h = headerMap_(headers);
-  const idCol = h['ID'];
-  if (idCol === undefined) throw new Error('No existe la columna ID en ' + MAIN_SHEET + '.');
+  const idCol = ensureIdColumn_(sheet, headers);
+  headers[idCol] = 'ID';
 
   for (let i = values.length - 1; i >= 1; i--) {
     if (clean_(values[i][idCol]) === id) {
@@ -316,6 +330,51 @@ function checkRecord_(rawId) {
     }
   }
   return { ok: true, found: false };
+}
+
+function ensureIdColumn_(sheet, headers) {
+  const h = headerMap_(headers);
+  if (h['ID'] !== undefined) return h['ID'];
+
+  const fechaCol = h['Fecha'];
+  const internoCol = h['Interno'];
+  if (fechaCol !== undefined && internoCol === fechaCol + 2 && !clean_(headers[fechaCol + 1])) {
+    const idCol = fechaCol + 1;
+    sheet.getRange(1, idCol + 1).setValue('ID');
+    return idCol;
+  }
+
+  throw new Error('No existe la columna ID ni un espacio vacío entre Fecha e Interno en ' + MAIN_SHEET + '.');
+}
+
+function findLegacyPendingRow_(values, h, p, idCol) {
+  const target = {
+    fecha: dateISO_(p.Fecha),
+    interno: clean_(p.Interno),
+    parte: int_(p['N° Parte']),
+    hi: int_(p['Horómetro inicial']),
+    hf: int_(p['Horómetro final']),
+    operador: clean_(p.Operador),
+    turno: clean_(p['Turno de trabajo'])
+  };
+
+  if (!target.fecha || !target.interno || target.parte == null || target.hi == null || target.hf == null) return null;
+
+  const matches = [];
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (clean_(r[idCol])) continue;
+    if (clean_(r[h['Interno']]) !== target.interno) continue;
+    if (dateISO_(r[h['Fecha']]) !== target.fecha) continue;
+    if (int_(r[h['N° Parte']]) !== target.parte) continue;
+    if (int_(r[h['Horómetro inicial']]) !== target.hi) continue;
+    if (int_(r[h['Horómetro final']]) !== target.hf) continue;
+    if (clean_(r[h['Operador']]) !== target.operador) continue;
+    if (clean_(r[h['Turno de trabajo']]) !== target.turno) continue;
+    matches.push(i);
+  }
+
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function requireText_(obj, name) {
