@@ -48,7 +48,7 @@ export default function App() {
   const [pending, setPending] = useState<PendingRecord[]>([])
   const [online, setOnline] = useState(navigator.onLine)
   const [msg, setMsg] = useState('')
-  const [tab, setTab] = useState<'form' | 'pending' | 'history'>('form')
+  const [tab, setTab] = useState<'form' | 'pending'>('form')
   const [syncing, setSyncing] = useState(false)
   const syncInFlight = useRef(false)
 
@@ -96,7 +96,9 @@ export default function App() {
             definitive = recovered
           }
 
-          await db.syncedRecords.put({ id: item.id, payload: definitive, syncedAt: new Date().toISOString() })
+          // En dispositivos compartidos no guardamos historial local de cargas sincronizadas.
+          // Una vez confirmada la escritura en Sheets, se elimina la carga pendiente del equipo.
+          void definitive
           await db.syncQueue.delete(item.id)
           ok++
         } catch (e) {
@@ -152,6 +154,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Borra cualquier historial local creado por versiones anteriores en este dispositivo.
+    db.syncedRecords.clear().catch(() => undefined)
     load()
     const on = () => { setOnline(true); sync() }
     const off = () => setOnline(false)
@@ -245,7 +249,6 @@ export default function App() {
   }
 
   if (!data) return <main className="shell"><div className="card"><h1>DELTA MINING</h1><p>Preparando datos…</p><p>La primera apertura requiere internet.</p></div></main>
-  const histPromise = () => db.syncedRecords.orderBy('syncedAt').reverse().limit(30).toArray()
 
   return <main className="shell">
     <header>
@@ -255,7 +258,6 @@ export default function App() {
     <nav>
       <button onClick={() => setTab('form')} className={tab === 'form' ? 'active' : ''}>Nueva carga</button>
       <button onClick={() => setTab('pending')} className={tab === 'pending' ? 'active' : ''}>Pendientes ({pending.length})</button>
-      <button onClick={() => setTab('history')} className={tab === 'history' ? 'active' : ''}>Historial</button>
     </nav>
 
     {tab === 'form' && <>
@@ -307,13 +309,5 @@ export default function App() {
       {msg && <div className="notice">{msg}</div>}
       {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ''}</small></article>)}
     </section>}
-
-    {tab === 'history' && <History load={histPromise} />}
   </main>
-}
-
-function History({ load }: { load: () => Promise<any[]> }) {
-  const [rows, setRows] = useState<any[]>([])
-  useEffect(() => { load().then(setRows) }, [])
-  return <section className="card"><h2>Mis últimas cargas</h2>{rows.length === 0 ? <p>Todavía no hay cargas sincronizadas desde este dispositivo.</p> : rows.map(r => <article className="item" key={r.id}><b>{r.payload.Interno}</b><span>{r.payload.Fecha} · Parte {r.payload['N° Parte']}</span><small>Sincronizado</small></article>)}</section>
 }
