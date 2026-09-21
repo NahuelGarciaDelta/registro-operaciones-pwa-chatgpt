@@ -1,4 +1,5 @@
 export type EstadoEquipo = '' | 'OD' | 'FS' | 'EM'
+export type Proyecto = 'JOSE MARIA' | 'FILO DEL SOL'
 
 export interface Equipment { id: string; equipo: string }
 export interface Task { id: string; tipoEquipo: string; tarea: string }
@@ -9,10 +10,19 @@ export interface EquipmentState {
   fechaUltimoRegistro: string | null
   ultimoTurno: string | null
 }
+export interface ProjectCatalog {
+  equipos: Equipment[]
+  supervisoresDelta: string[]
+  supervisoresCliente: string[]
+  equipmentState: EquipmentState[]
+}
 export interface BootstrapData {
   generatedFrom?: string
   generatedAt?: string
   project: string
+  projects?: Proyecto[]
+  projectCatalogs?: Partial<Record<Proyecto, ProjectCatalog>>
+  // Campos legacy para mantener compatibilidad con bootstrap.json y cachés antiguas de JM.
   equipos: Equipment[]
   operadores: string[]
   supervisoresDelta: string[]
