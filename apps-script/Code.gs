@@ -1,12 +1,25 @@
-const MAIN_SHEET = 'R_OP02_JM';
 const TZ = 'America/Argentina/San_Juan';
 const DATE_FORMAT = 'dd/MM/yyyy';
 const ALLOWED_PROJECTS = ['JOSE MARIA', 'FILO DEL SOL'];
+const PROJECT_CONFIG = {
+  'JOSE MARIA': {
+    mainSheet: 'R_OP02_JM',
+    equiposSheet: 'EQUIPOS JM',
+    supervisoresSheet: 'SUPERVISORES JM',
+    supervisoresClienteSheet: 'SUPERVISOR VIAL CLIENTE JM'
+  },
+  'FILO DEL SOL': {
+    mainSheet: 'R_OP02_FS',
+    equiposSheet: 'EQUIPOS FS',
+    supervisoresSheet: 'SUPERVISORES FS',
+    supervisoresClienteSheet: 'SUPERVISOR VIAL CLIENTE FS'
+  }
+};
 
 /**
  * Ejecutar UNA VEZ desde el editor de Apps Script vinculado a "Registro para operarios".
  * Configura el ID de la planilla, crea una carpeta de firmas, genera un secreto,
- * fija la zona horaria y normaliza la columna Fecha a fechas reales dd/MM/yyyy.
+ * fija la zona horaria y normaliza las columnas Fecha de JM y FS.
  */
 function setupProject() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -30,7 +43,7 @@ function setupProject() {
     props.setProperty('SIGNATURES_FOLDER_ID', folderId);
   }
 
-  const normalizedDates = normalizeDateColumn_();
+  const normalizedDates = normalizeDateColumns_();
   const result = {
     spreadsheetId: ss.getId(),
     signaturesFolderId: folderId,
@@ -42,8 +55,8 @@ function setupProject() {
 }
 
 function normalizeDateColumn() {
-  const changed = normalizeDateColumn_();
-  console.log('Fechas normalizadas: ' + changed);
+  const changed = normalizeDateColumns_();
+  console.log(JSON.stringify(changed));
   return changed;
 }
 
@@ -102,40 +115,28 @@ function rows_(name) {
 function clean_(v) { return v == null ? '' : String(v).trim(); }
 function unique_(arr) { return [...new Set(arr.filter(Boolean))]; }
 
+function projectConfig_(project) {
+  const key = clean_(project);
+  const cfg = PROJECT_CONFIG[key];
+  if (!cfg) throw new Error('Proyecto inválido. Debe ser JOSE MARIA o FILO DEL SOL.');
+  return cfg;
+}
+
 function valuesFromSingleColumnSheet_(name) {
   const sheet = ss_().getSheetByName(name);
   if (!sheet || sheet.getLastRow() < 1) return [];
   return unique_(sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues().flat().map(clean_));
 }
 
-function bootstrap_() {
-  const ss = ss_();
-
-  const equipos = rows_('EQUIPOS').slice(1)
-    .filter(r => clean_(r[0]))
-    .map(r => ({ id: clean_(r[0]), equipo: clean_(r[1]) }));
-
-  const operadores = unique_(rows_('OPERADORES').slice(1)
-    .map(r => clean_(r[1])));
-
-  const supervisoresDelta = unique_(rows_('SUPERVISORES').slice(1)
-    .map(r => clean_(r[1])));
-
-  const tareas = rows_('Tareas').slice(1)
-    .filter(r => clean_(r[2]))
-    .map(r => ({ id: clean_(r[0]), tipoEquipo: clean_(r[1]), tarea: clean_(r[2]) }));
-
-  let areas = valuesFromSingleColumnSheet_('Area de trabajo');
-  let supervisoresCliente = valuesFromSingleColumnSheet_('Supervisor vial cliente');
-
-  const mainSheet = ss.getSheetByName(MAIN_SHEET);
-  if (!mainSheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
-  const main = mainSheet.getDataRange().getValues();
+function equipmentStateFromSheet_(sheetName) {
+  const sheet = ss_().getSheetByName(sheetName);
+  if (!sheet || sheet.getLastRow() < 1) return [];
+  const main = sheet.getDataRange().getValues();
+  if (!main.length) return [];
   const h = headerMap_(main[0]);
-  const states = {};
-  const fallbackAreas = {};
-  const fallbackSupCli = {};
+  if (h['Interno'] === undefined) return [];
 
+  const states = {};
   main.slice(1).forEach((r, i) => {
     const interno = clean_(r[h['Interno']]);
     if (!interno) return;
@@ -143,12 +144,6 @@ function bootstrap_() {
     const part = num_(r[h['N° Parte']]);
     const hf = num_(r[h['Horómetro final']]);
     const turno = clean_(r[h['Turno de trabajo']]);
-
-    const area = clean_(r[h['Area de trabajo']]);
-    if (area) fallbackAreas[area] = 1;
-    const sc = clean_(r[h['Supervisor Vial Cliente']]);
-    if (sc) fallbackSupCli[sc] = 1;
-
     const prev = states[interno];
     if (!prev || fecha > prev.fechaUltimoRegistro || (fecha === prev.fechaUltimoRegistro && i > prev._i)) {
       states[interno] = {
@@ -162,26 +157,74 @@ function bootstrap_() {
     }
   });
 
-  if (!areas.length) areas = Object.keys(fallbackAreas).sort();
-  if (!supervisoresCliente.length) supervisoresCliente = Object.keys(fallbackSupCli).sort();
-
-  const equipmentState = Object.values(states).map(s => {
+  return Object.values(states).map(s => {
     const copy = Object.assign({}, s);
     delete copy._i;
     return copy;
   });
+}
+
+function projectCatalog_(project) {
+  const cfg = projectConfig_(project);
+  const equipos = rows_(cfg.equiposSheet).slice(1)
+    .filter(r => clean_(r[0]))
+    .map(r => ({ id: clean_(r[0]), equipo: clean_(r[1]) }));
+
+  const supervisoresDelta = unique_(rows_(cfg.supervisoresSheet).slice(1)
+    .map(r => clean_(r[1])));
+
+  const supervisoresCliente = valuesFromSingleColumnSheet_(cfg.supervisoresClienteSheet);
+
+  return {
+    equipos,
+    supervisoresDelta,
+    supervisoresCliente,
+    equipmentState: equipmentStateFromSheet_(cfg.mainSheet)
+  };
+}
+
+function bootstrap_() {
+  const operadores = unique_(rows_('OPERADORES').slice(1).map(r => clean_(r[1])));
+  const tareas = rows_('Tareas').slice(1)
+    .filter(r => clean_(r[2]))
+    .map(r => ({ id: clean_(r[0]), tipoEquipo: clean_(r[1]), tarea: clean_(r[2]) }));
+  let areas = valuesFromSingleColumnSheet_('Area de trabajo');
+
+  if (!areas.length) {
+    const fallbackAreas = {};
+    ALLOWED_PROJECTS.forEach(project => {
+      const cfg = projectConfig_(project);
+      const values = rows_(cfg.mainSheet);
+      if (!values.length) return;
+      const h = headerMap_(values[0]);
+      if (h['Area de trabajo'] === undefined) return;
+      values.slice(1).forEach(r => {
+        const area = clean_(r[h['Area de trabajo']]);
+        if (area) fallbackAreas[area] = 1;
+      });
+    });
+    areas = Object.keys(fallbackAreas).sort();
+  }
+
+  const jm = projectCatalog_('JOSE MARIA');
+  const fs = projectCatalog_('FILO DEL SOL');
 
   return {
     project: 'JOSE MARIA',
     projects: ALLOWED_PROJECTS,
-    equipos,
+    projectCatalogs: {
+      'JOSE MARIA': jm,
+      'FILO DEL SOL': fs
+    },
+    // Compatibilidad con cachés/frontend anteriores: estos campos representan JM.
+    equipos: jm.equipos,
     operadores,
-    supervisoresDelta,
-    supervisoresCliente,
+    supervisoresDelta: jm.supervisoresDelta,
+    supervisoresCliente: jm.supervisoresCliente,
     tareas,
     unidades: [],
     areas,
-    equipmentState
+    equipmentState: jm.equipmentState
   };
 }
 
@@ -189,25 +232,28 @@ function createRecord_(body) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const sheet = ss_().getSheetByName(MAIN_SHEET);
-    if (!sheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
+    const id = clean_(body.id || (body.payload && body.payload.ID));
+    if (!id) throw new Error('ID requerido');
+
+    const p = Object.assign({}, body.payload || {});
+    p.ID = id;
+    requireText_(p, 'Proyecto');
+    p.Proyecto = clean_(p.Proyecto);
+    const cfg = projectConfig_(p.Proyecto);
+
+    const sheet = ss_().getSheetByName(cfg.mainSheet);
+    if (!sheet) throw new Error('No existe la hoja ' + cfg.mainSheet);
     const values = sheet.getDataRange().getValues();
     const headers = values[0];
     const idCol = ensureIdColumn_(sheet, headers);
     headers[idCol] = 'ID';
     const h = headerMap_(headers);
 
-    const id = clean_(body.id || (body.payload && body.payload.ID));
-    if (!id) throw new Error('ID requerido');
-
     for (let i = 1; i < values.length; i++) {
       if (clean_(values[i][idCol]) === id) {
         return { ok: true, duplicate: true, record: rowToRecord_(headers, values[i]) };
       }
     }
-
-    const p = Object.assign({}, body.payload || {});
-    p.ID = id;
 
     const legacyMatch = findLegacyPendingRow_(values, h, p, idCol);
     if (legacyMatch !== null) {
@@ -219,12 +265,23 @@ function createRecord_(body) {
 
     [
       'Fecha', 'Interno', 'Equipo', 'Operador', 'Supervisor Delta', 'Supervisor Vial Cliente',
-      'Turno de trabajo', 'Proyecto', 'Area de trabajo', 'Cambio de tareas planificadas',
+      'Turno de trabajo', 'Area de trabajo', 'Cambio de tareas planificadas',
       'Información sobre Desgaste', 'Combustible', 'Aceite'
     ].forEach(name => requireText_(p, name));
 
-    if (ALLOWED_PROJECTS.indexOf(clean_(p.Proyecto)) === -1) {
-      throw new Error('Proyecto inválido. Debe ser JOSE MARIA o FILO DEL SOL.');
+    const validEquipos = rows_(cfg.equiposSheet).slice(1).map(r => clean_(r[0])).filter(Boolean);
+    if (validEquipos.indexOf(clean_(p.Interno)) === -1) {
+      throw new Error('El equipo ' + clean_(p.Interno) + ' no pertenece al proyecto ' + p.Proyecto + '.');
+    }
+
+    const validSupDelta = unique_(rows_(cfg.supervisoresSheet).slice(1).map(r => clean_(r[1])));
+    if (validSupDelta.indexOf(clean_(p['Supervisor Delta'])) === -1) {
+      throw new Error('Supervisor Delta inválido para el proyecto ' + p.Proyecto + '.');
+    }
+
+    const validSupCliente = valuesFromSingleColumnSheet_(cfg.supervisoresClienteSheet);
+    if (validSupCliente.indexOf(clean_(p['Supervisor Vial Cliente'])) === -1) {
+      throw new Error('Supervisor Vial Cliente inválido para el proyecto ' + p.Proyecto + '.');
     }
 
     const interno = clean_(p.Interno);
@@ -250,7 +307,7 @@ function createRecord_(body) {
     }
 
     if (!best || best.part == null || best.hf == null) {
-      throw new Error('No existe una referencia previa válida de N° Parte y Horómetro final para ' + interno + '.');
+      throw new Error('No existe una referencia previa válida de N° Parte y Horómetro final para ' + interno + ' en ' + p.Proyecto + '.');
     }
 
     const turno = clean_(p['Turno de trabajo']);
@@ -333,18 +390,20 @@ function checkRecord_(rawId) {
   const id = clean_(rawId);
   if (!id) throw new Error('ID requerido');
 
-  const sheet = ss_().getSheetByName(MAIN_SHEET);
-  if (!sheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) return { ok: true, found: false };
+  for (const project of ALLOWED_PROJECTS) {
+    const cfg = projectConfig_(project);
+    const sheet = ss_().getSheetByName(cfg.mainSheet);
+    if (!sheet || sheet.getLastRow() < 1) continue;
+    const values = sheet.getDataRange().getValues();
+    if (!values.length) continue;
+    const headers = values[0];
+    const idCol = ensureIdColumn_(sheet, headers);
+    headers[idCol] = 'ID';
 
-  const headers = values[0];
-  const idCol = ensureIdColumn_(sheet, headers);
-  headers[idCol] = 'ID';
-
-  for (let i = values.length - 1; i >= 1; i--) {
-    if (clean_(values[i][idCol]) === id) {
-      return { ok: true, found: true, record: rowToRecord_(headers, values[i]) };
+    for (let i = values.length - 1; i >= 1; i--) {
+      if (clean_(values[i][idCol]) === id) {
+        return { ok: true, found: true, record: rowToRecord_(headers, values[i]) };
+      }
     }
   }
   return { ok: true, found: false };
@@ -354,60 +413,66 @@ function listReceipts_(rawOperator) {
   const operator = clean_(rawOperator);
   if (!operator) throw new Error('Operador requerido para consultar comprobantes.');
 
-  const sheet = ss_().getSheetByName(MAIN_SHEET);
-  if (!sheet) throw new Error('No existe la hoja ' + MAIN_SHEET);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) return { ok: true, operator, receipts: [] };
-
-  const headers = values[0];
-  const idCol = ensureIdColumn_(sheet, headers);
-  headers[idCol] = 'ID';
-  const h = headerMap_(headers);
-
-  const required = ['Fecha', 'Interno', 'Equipo', 'Operador', 'Turno de trabajo', 'N° Parte', 'Proyecto', 'Area de trabajo', 'Horómetro inicial', 'Horómetro final', 'Cant. Hs.', 'OD o FS'];
-  required.forEach(name => {
-    if (h[name] === undefined) throw new Error('Falta la columna ' + name + ' en ' + MAIN_SHEET + '.');
-  });
-
   const receipts = [];
-  for (let i = 1; i < values.length; i++) {
-    const r = values[i];
-    if (clean_(r[h['Operador']]) !== operator) continue;
+  ALLOWED_PROJECTS.forEach((project, projectIndex) => {
+    const cfg = projectConfig_(project);
+    const sheet = ss_().getSheetByName(cfg.mainSheet);
+    if (!sheet || sheet.getLastRow() < 1) return;
+    const values = sheet.getDataRange().getValues();
+    if (!values.length) return;
 
-    const record = rowToRecord_(headers, r);
-    const interno = clean_(record.Interno);
-    const parte = int_(record['N° Parte']);
-    if (!interno || parte == null) continue;
-
-    receipts.push({
-      id: clean_(record.ID) || ('ROW-' + (i + 1)),
-      codigo: receiptCode_(record, i + 1),
-      fecha: dateISO_(record.Fecha),
-      operador: clean_(record.Operador),
-      interno,
-      equipo: clean_(record.Equipo),
-      turno: clean_(record['Turno de trabajo']),
-      parte,
-      proyecto: clean_(record.Proyecto),
-      area: clean_(record['Area de trabajo']),
-      hi: int_(record['Horómetro inicial']),
-      hf: int_(record['Horómetro final']),
-      horas: num_(record['Cant. Hs.']),
-      estado: clean_(record['OD o FS']),
-      rowNumber: i + 1
+    const headers = values[0];
+    const idCol = ensureIdColumn_(sheet, headers);
+    headers[idCol] = 'ID';
+    const h = headerMap_(headers);
+    const required = ['Fecha', 'Interno', 'Equipo', 'Operador', 'Turno de trabajo', 'N° Parte', 'Proyecto', 'Area de trabajo', 'Horómetro inicial', 'Horómetro final', 'Cant. Hs.', 'OD o FS'];
+    required.forEach(name => {
+      if (h[name] === undefined) throw new Error('Falta la columna ' + name + ' en ' + cfg.mainSheet + '.');
     });
-  }
+
+    for (let i = 1; i < values.length; i++) {
+      const r = values[i];
+      if (clean_(r[h['Operador']]) !== operator) continue;
+      const record = rowToRecord_(headers, r);
+      const interno = clean_(record.Interno);
+      const parte = int_(record['N° Parte']);
+      if (!interno || parte == null) continue;
+
+      receipts.push({
+        id: clean_(record.ID) || (cfg.mainSheet + '-ROW-' + (i + 1)),
+        codigo: receiptCode_(record, i + 1, cfg.mainSheet),
+        fecha: dateISO_(record.Fecha),
+        operador: clean_(record.Operador),
+        interno,
+        equipo: clean_(record.Equipo),
+        turno: clean_(record['Turno de trabajo']),
+        parte,
+        proyecto: clean_(record.Proyecto) || project,
+        area: clean_(record['Area de trabajo']),
+        hi: int_(record['Horómetro inicial']),
+        hf: int_(record['Horómetro final']),
+        horas: num_(record['Cant. Hs.']),
+        estado: clean_(record['OD o FS']),
+        _rowNumber: i + 1,
+        _projectIndex: projectIndex
+      });
+    }
+  });
 
   receipts.sort((a, b) => {
     if (a.fecha !== b.fecha) return a.fecha < b.fecha ? 1 : -1;
-    return b.rowNumber - a.rowNumber;
+    if (a._projectIndex !== b._projectIndex) return b._projectIndex - a._projectIndex;
+    return b._rowNumber - a._rowNumber;
   });
 
-  receipts.forEach(r => delete r.rowNumber);
+  receipts.forEach(r => {
+    delete r._rowNumber;
+    delete r._projectIndex;
+  });
   return { ok: true, operator, receipts };
 }
 
-function receiptCode_(record, rowNumber) {
+function receiptCode_(record, rowNumber, sheetName) {
   const interno = clean_(record.Interno);
   const parte = int_(record['N° Parte']);
   const compactInternal = interno.replace(/[^A-Za-z0-9]/g, '');
@@ -416,8 +481,8 @@ function receiptCode_(record, rowNumber) {
 
   if (!token) {
     const source = [
-      dateISO_(record.Fecha), interno, parte == null ? '' : parte,
-      clean_(record.Operador), clean_(record['Turno de trabajo']),
+      sheetName || '', dateISO_(record.Fecha), interno, parte == null ? '' : parte,
+      clean_(record.Operador), clean_(record['Turno de trabajo']), clean_(record.Proyecto),
       int_(record['Horómetro inicial']), int_(record['Horómetro final']), rowNumber
     ].join('|');
     const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, source, Utilities.Charset.UTF_8);
@@ -439,7 +504,7 @@ function ensureIdColumn_(sheet, headers) {
     return idCol;
   }
 
-  throw new Error('No existe la columna ID ni un espacio vacío entre Fecha e Interno en ' + MAIN_SHEET + '.');
+  throw new Error('No existe la columna ID ni un espacio vacío entre Fecha e Interno en ' + sheet.getName() + '.');
 }
 
 function findLegacyPendingRow_(values, h, p, idCol) {
@@ -524,14 +589,22 @@ function dateISO_(v) {
   return '';
 }
 
-function normalizeDateColumn_() {
-  const ss = ss_();
-  const sheet = ss.getSheetByName(MAIN_SHEET);
+function normalizeDateColumns_() {
+  const result = {};
+  ALLOWED_PROJECTS.forEach(project => {
+    const cfg = projectConfig_(project);
+    result[cfg.mainSheet] = normalizeDateColumnInSheet_(cfg.mainSheet);
+  });
+  return result;
+}
+
+function normalizeDateColumnInSheet_(sheetName) {
+  const sheet = ss_().getSheetByName(sheetName);
   if (!sheet || sheet.getLastRow() < 2) return 0;
 
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const h = headerMap_(headers);
-  if (h['Fecha'] === undefined) throw new Error('No existe la columna Fecha.');
+  if (h['Fecha'] === undefined) throw new Error('No existe la columna Fecha en ' + sheetName + '.');
 
   const range = sheet.getRange(2, h['Fecha'] + 1, sheet.getLastRow() - 1, 1);
   const values = range.getValues();
