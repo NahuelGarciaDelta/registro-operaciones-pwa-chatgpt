@@ -3,6 +3,24 @@ import type { BootstrapData, PendingRecord, Rop02Record } from './types'
 const base = import.meta.env.VITE_BACKEND_URL || '/api/backend'
 const CREATE_TIMEOUT_MS = 20000
 const CHECK_TIMEOUT_MS = 12000
+const RECEIPTS_TIMEOUT_MS = 20000
+
+export interface ReceiptRecord {
+  id: string
+  codigo: string
+  fecha: string
+  operador: string
+  interno: string
+  equipo: string
+  turno: string
+  parte: number | null
+  proyecto: string
+  area: string
+  hi: number | null
+  hf: number | null
+  horas: number | null
+  estado: string
+}
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 15000) {
   const controller = new AbortController()
@@ -63,4 +81,15 @@ export async function checkRecord(id: string): Promise<Rop02Record | null> {
   }, CHECK_TIMEOUT_MS)
   const data = await jsonOrThrow(r)
   return data.found && data.record ? data.record : null
+}
+
+export async function getReceipts(operator: string): Promise<ReceiptRecord[]> {
+  if (!operator.trim()) return []
+  const r = await fetchWithTimeout(base, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'listReceipts', operator })
+  }, RECEIPTS_TIMEOUT_MS)
+  const data = await jsonOrThrow(r)
+  return Array.isArray(data.receipts) ? data.receipts : []
 }
