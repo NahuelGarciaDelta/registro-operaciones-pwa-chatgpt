@@ -154,8 +154,6 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // Los comprobantes ahora se consultan directamente desde Google Sheets.
-    // Limpiamos el historial local de versiones anteriores para no generar confusión.
     db.syncedRecords.clear().catch(() => undefined)
     load()
     const on = () => { setOnline(true); sync() }
@@ -172,6 +170,9 @@ export default function App() {
 
   const equipment = useMemo(() => data?.equipos.find(e => e.id === form.Interno), [data, form.Interno])
   const tasks = useMemo(() => tasksForEquipment(data?.tareas || [], form.Equipo), [data, form.Equipo])
+  const shiftRef = useMemo(() => form.Interno && data ? provisionalReference(form.Interno, data.equipmentState, pending) : null, [form.Interno, data, pending])
+  const previousShift = shiftRef?.turnoAnterior || null
+  const nightAllowed = previousShift === 'TURNO DIA'
   const hfTooLow = form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro final'] < form['Horómetro inicial']
   const set = (k: keyof Rop02Record, v: any) => setForm(f => ({ ...f, [k]: v }))
 
@@ -182,8 +183,20 @@ export default function App() {
     setForm(f => ({
       ...f, Interno: v, Equipo: eq?.equipo || '', 'N° Parte': ref.parte,
       'Horómetro inicial': ref.hi, 'Horómetro final': null, 'Cant. Hs.': null,
+      'Turno de trabajo': 'TURNO DIA',
       'Tarea 1': '', 'Tarea 2': '', 'Observaciones 1': '', 'Observaciones 2': '', 'OD o FS': ''
     }))
+    setMsg('')
+  }
+
+  const chooseTurno = (v: string) => {
+    if (v === 'TURNO NOCHE' && !nightAllowed) {
+      setMsg(`No se puede cargar TURNO NOCHE${form.Interno ? ` para ${form.Interno}` : ''}. El registro anterior debe ser TURNO DIA${previousShift ? ` y actualmente figura como ${previousShift}` : ''}.`)
+      set('Turno de trabajo', 'TURNO DIA')
+      return
+    }
+    setMsg('')
+    set('Turno de trabajo', v)
   }
 
   const chooseEstado = (v: EstadoEquipo) => {
@@ -252,6 +265,11 @@ export default function App() {
 
       if (missing.length) {
         throw new Error(`Faltan completar los siguientes campos obligatorios: ${missing.join(', ')}.`)
+      }
+
+      if (form['Turno de trabajo'] === 'TURNO NOCHE' && shiftRef?.turnoAnterior !== 'TURNO DIA') {
+        const anterior = shiftRef?.turnoAnterior || 'sin turno previo informado'
+        throw new Error(`No se puede cargar TURNO NOCHE para ${form.Interno}. El registro anterior debe ser TURNO DIA y actualmente figura como ${anterior}.`)
       }
 
       schema.parse(form)
@@ -329,7 +347,7 @@ export default function App() {
         <h2 className="sectionTitle wide">DATOS DEL EQUIPO</h2>
         <label>Interno *<select required value={form.Interno} onChange={e => chooseInterno(e.target.value)}><option value="">Seleccionar…</option>{data.equipos.map(e => <option key={e.id} value={e.id}>{e.id}</option>)}</select></label>
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
-        <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => set('Turno de trabajo', e.target.value)}><option>TURNO DIA</option><option>TURNO NOCHE</option></select></label>
+        <label>Turno *<select required value={form['Turno de trabajo']} onChange={e => chooseTurno(e.target.value)}><option>TURNO DIA</option><option disabled={!nightAllowed}>TURNO NOCHE</option></select>{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && 'El turno noche requiere un turno día inmediatamente anterior.'}</small>}</label>
         <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>Automático según la última carga del equipo.</small></label>
         <label>Horómetro inicial *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último horómetro final conocido.</small></label>
         <label>Horómetro final *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El horómetro final no puede ser menor que el inicial.</small>}</label>
