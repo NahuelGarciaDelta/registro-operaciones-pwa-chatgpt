@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 export type SearchableOption = string | { value: string; label: string }
 
@@ -7,6 +7,7 @@ type Props = {
   options: SearchableOption[]
   onChange: (value: string) => void
   placeholder?: string
+  displayPlaceholder?: string
   required?: boolean
   disabled?: boolean
   emptyText?: string
@@ -27,6 +28,7 @@ export default function SearchableSelect({
   options,
   onChange,
   placeholder = 'Escribí para buscar…',
+  displayPlaceholder = 'Seleccionar…',
   required = false,
   disabled = false,
   emptyText = 'Sin coincidencias'
@@ -39,12 +41,8 @@ export default function SearchableSelect({
   }, [options])
 
   const selectedLabel = normalizedOptions.find(option => option.value === value)?.label || value
-  const [query, setQuery] = useState(selectedLabel)
+  const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    if (!open) setQuery(selectedLabel)
-  }, [selectedLabel, open])
 
   const filtered = useMemo(() => {
     const q = normalize(query)
@@ -54,60 +52,75 @@ export default function SearchableSelect({
       .slice(0, 60)
   }, [normalizedOptions, query])
 
-  const select = (option: { value: string; label: string }) => {
-    setQuery(option.label)
+  const close = () => {
     setOpen(false)
-    onChange(option.value)
+    setQuery('')
   }
 
-  const finishTyping = () => {
-    const exact = normalizedOptions.find(option =>
-      normalize(option.label) === normalize(query) || normalize(option.value) === normalize(query)
-    )
-    if (exact) {
-      select(exact)
-      return
-    }
-    setQuery(selectedLabel)
-    setOpen(false)
+  const select = (option: { value: string; label: string }) => {
+    onChange(option.value)
+    close()
+  }
+
+  const toggle = () => {
+    if (disabled) return
+    setQuery('')
+    setOpen(v => !v)
   }
 
   return <div className="searchSelect">
-    <input
-      type="text"
-      value={query}
-      required={required}
+    <button
+      type="button"
+      className={value ? 'searchSelectTrigger hasValue' : 'searchSelectTrigger'}
       disabled={disabled}
-      autoComplete="off"
-      placeholder={placeholder}
+      aria-haspopup="listbox"
       aria-expanded={open}
-      onFocus={() => !disabled && setOpen(true)}
-      onChange={e => {
-        setQuery(e.target.value)
-        setOpen(true)
-        if (value) onChange('')
-      }}
+      aria-required={required}
+      onClick={toggle}
       onKeyDown={e => {
-        if (e.key === 'Enter') {
+        if ((e.key === 'Enter' || e.key === ' ') && !open) {
           e.preventDefault()
-          if (filtered.length) select(filtered[0])
+          setQuery('')
+          setOpen(true)
         }
-        if (e.key === 'Escape') {
-          setQuery(selectedLabel)
-          setOpen(false)
-        }
+        if (e.key === 'Escape') close()
       }}
-      onBlur={() => window.setTimeout(finishTyping, 120)}
-    />
-    {!disabled && <span className="searchChevron" aria-hidden="true">⌄</span>}
-    {open && !disabled && <div className="searchDropdown">
-      {filtered.length ? filtered.map(option => <button
-        key={option.value}
-        type="button"
-        className={option.value === value ? 'searchOption selected' : 'searchOption'}
-        onMouseDown={e => e.preventDefault()}
-        onClick={() => select(option)}
-      >{option.label}</button>) : <div className="searchEmpty">{emptyText}</div>}
+    >
+      <span>{selectedLabel || displayPlaceholder}</span>
+      <span className="searchChevron" aria-hidden="true">⌄</span>
+    </button>
+
+    {open && !disabled && <div className="searchDropdown" role="listbox">
+      <div className="searchBoxWrap">
+        <span className="searchIcon" aria-hidden="true">⌕</span>
+        <input
+          className="searchInput"
+          type="text"
+          value={query}
+          autoFocus
+          autoComplete="off"
+          placeholder={placeholder}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              if (filtered.length) select(filtered[0])
+            }
+            if (e.key === 'Escape') close()
+          }}
+          onBlur={() => window.setTimeout(close, 140)}
+        />
+      </div>
+
+      <div className="searchOptions">
+        {filtered.length ? filtered.map(option => <button
+          key={option.value}
+          type="button"
+          className={option.value === value ? 'searchOption selected' : 'searchOption'}
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => select(option)}
+        >{option.label}</button>) : <div className="searchEmpty">{emptyText}</div>}
+      </div>
     </div>}
   </div>
 }
