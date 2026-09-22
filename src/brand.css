@@ -1,0 +1,296 @@
+:root{
+  --black:#201e1f;
+  --black-2:#171617;
+  --black-3:#2b292a;
+  --red:#ff2340;
+  --red-dark:#d71938;
+  --red-soft:#fff1f4;
+  --surface-2:#f6f6f7;
+  --border:#e0e0e3;
+  --border-strong:#c9c9ce;
+  --shadow-sm:0 3px 10px rgba(18,17,18,.06);
+  --shadow-md:0 16px 38px rgba(18,17,18,.10);
+  --shadow-lg:0 22px 60px rgba(18,17,18,.16);
+}
+
+body{
+  background:
+    radial-gradient(circle at 100% 0,rgba(255,35,64,.09),transparent 28rem),
+    linear-gradient(180deg,#ededee 0,#f8f8f9 260px,#f3f3f4 100%);
+}
+
+header{
+  min-height:88px;
+  padding:calc(12px + env(safe-area-inset-top)) 17px 12px;
+  gap:12px;
+  background:
+    radial-gradient(circle at 12% -20%,rgba(255,35,64,.12),transparent 15rem),
+    linear-gradient(135deg,#131213 0,#201e1f 58%,#2b292a 100%);
+  border-bottom-color:var(--red);
+  box-shadow:0 10px 30px rgba(0,0,0,.28);
+}
+header::before{
+  content:"";
+  width:58px;
+  height:58px;
+  flex:0 0 58px;
+  border-radius:14px;
+  background:#201e1f url('/delta-logo.svg') center/cover no-repeat;
+  border:1px solid rgba(255,255,255,.13);
+  box-shadow:0 7px 18px rgba(0,0,0,.28),inset 0 0 0 1px rgba(255,255,255,.025);
+}
+header::after{
+  height:3px;
+  background:linear-gradient(90deg,#ff2340,#ff4b63 48%,#ff2340);
+  box-shadow:0 1px 12px rgba(255,35,64,.48);
+}
+header>div:first-of-type{
+  margin-right:auto;
+  justify-content:center;
+  gap:3px;
+}
+header strong{
+  font-size:.98rem;
+  letter-spacing:.025em;
+  font-weight:850;
+}
+header strong::before{display:none}
+header span{
+  color:#d8d8dc;
+  font-size:.73rem;
+  letter-spacing:.02em;
+}
+
+.status{
+  display:flex;
+  align-items:center;
+  min-height:36px;
+  padding:8px 11px;
+  border-radius:12px;
+  font-size:.72rem;
+  font-weight:750;
+  background:rgba(255,255,255,.07);
+  border-color:rgba(255,255,255,.13);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+}
+.status.off{
+  background:rgba(255,35,64,.16);
+  border-color:rgba(255,79,102,.30);
+}
+
+nav{
+  top:88px;
+  gap:8px;
+  padding:12px 2px 11px;
+}
+nav button{
+  flex:1 0 auto;
+  min-height:44px;
+  border-radius:13px;
+  padding:10px 14px;
+  background:rgba(255,255,255,.94);
+  border-color:#dddddf;
+  font-size:.84rem;
+  font-weight:800;
+}
+nav .active{
+  background:linear-gradient(135deg,#181718,#272526);
+  border-color:#181718;
+  box-shadow:0 8px 20px rgba(0,0,0,.16),inset 0 -3px 0 var(--red);
+}
+
+.formToolbar{margin:2px 0 10px}
+.formToolbar .secondary{
+  min-height:38px;
+  border-radius:999px;
+  padding:8px 13px;
+  background:rgba(255,255,255,.88);
+  font-size:.74rem;
+  text-transform:none;
+  letter-spacing:.015em;
+}
+.formToolbar .secondary::before{content:"↻  ";color:var(--red);font-weight:900}
+
+.card{
+  border-radius:21px;
+  border:1px solid rgba(216,216,220,.96);
+  box-shadow:0 16px 44px rgba(20,18,19,.095);
+  background:rgba(255,255,255,.985);
+}
+.formgrid{gap:16px}
+
+.requiredNote{
+  display:inline-flex;
+  align-items:center;
+  width:max-content;
+  max-width:100%;
+  padding:6px 9px;
+  border-radius:999px;
+  background:#f6f6f7;
+  color:#73737a;
+  border:1px solid #ececee;
+  font-size:.73rem;
+  font-weight:700;
+}
+
+.sectionTitle{
+  margin:14px 0 1px;
+  padding:12px 14px 12px 29px;
+  border:0;
+  border-radius:11px;
+  background:linear-gradient(100deg,#1a191a 0,#292728 100%);
+  box-shadow:0 6px 16px rgba(0,0,0,.09);
+  font-size:.78rem;
+  letter-spacing:.115em;
+}
+.sectionTitle:first-of-type{margin-top:0}
+.sectionTitle::before{
+  left:13px;
+  width:5px;
+  height:20px;
+  background:var(--red);
+  box-shadow:0 0 12px rgba(255,35,64,.40);
+}
+
+label{
+  gap:7px;
+  color:#222023;
+  font-size:.87rem;
+  font-weight:770;
+}
+input,select,textarea,.searchSelectTrigger{
+  border-radius:13px;
+  border-color:#cfcfd3;
+  background:#fff;
+}
+input,select,textarea{min-height:50px}
+textarea{min-height:92px}
+input:focus,select:focus,textarea:focus,.searchInput:focus,.searchSelectTrigger:focus,.searchSelectTrigger[aria-expanded="true"]{
+  border-color:var(--red);
+  box-shadow:0 0 0 3px rgba(255,35,64,.11);
+}
+.locked{
+  background:linear-gradient(180deg,#ededee,#f5f5f6)!important;
+  border-color:#d4d4d7!important;
+}
+
+.searchSelectTrigger{
+  min-height:50px;
+  padding:11px 13px;
+}
+.searchDropdown{
+  border-radius:15px;
+  border-color:#d7d7da;
+  padding:7px;
+  box-shadow:0 22px 60px rgba(15,14,15,.17);
+}
+.searchInput{
+  border-radius:10px;
+  background:#f6f6f7;
+}
+.searchOption{
+  border-radius:10px;
+  min-height:45px;
+}
+.searchOption.selected{
+  background:#201e1f;
+  box-shadow:inset 4px 0 0 var(--red);
+}
+
+.primary{
+  position:relative;
+  min-height:57px;
+  border-radius:14px;
+  background:linear-gradient(135deg,#ff3450 0,#ff2340 52%,#d71938 100%);
+  box-shadow:0 12px 28px rgba(255,35,64,.27),inset 0 1px 0 rgba(255,255,255,.20);
+}
+.primary::before{content:"✓";margin-right:8px;font-size:1rem}
+.primary:hover{box-shadow:0 15px 34px rgba(255,35,64,.32)}
+
+.notice{
+  border-color:#ffc3cd;
+  border-left-color:var(--red);
+  background:linear-gradient(90deg,#fff1f4,#fff9fa);
+  color:#701226;
+}
+
+.signature{
+  border-color:#b8b8bd;
+  border-radius:15px;
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.96),rgba(250,250,251,.98)),
+    repeating-linear-gradient(0deg,transparent 0,transparent 28px,#eeeeef 29px);
+}
+
+.item{
+  margin:2px 0;
+  padding:14px 12px;
+  border:1px solid transparent;
+  border-bottom-color:#ececee;
+  border-radius:11px;
+}
+.item:hover{
+  border-color:#eeeeef;
+  border-left:4px solid var(--red);
+  background:#fbfbfc;
+}
+.item b{font-size:.94rem}
+
+.shell>.card:first-child h1:first-child{
+  margin:0 0 13px;
+  font-size:0;
+  text-align:center;
+}
+.shell>.card:first-child h1:first-child::before{
+  content:"";
+  display:block;
+  width:122px;
+  height:122px;
+  margin:0 auto 18px;
+  border-radius:22px;
+  background:#201e1f url('/delta-logo.svg') center/cover no-repeat;
+  box-shadow:0 18px 40px rgba(0,0,0,.18);
+}
+.shell>.card:first-child h1:first-child::after{
+  content:"Registro de Operaciones";
+  display:block;
+  color:#201e1f;
+  font-size:1.15rem;
+  font-weight:900;
+  letter-spacing:-.02em;
+}
+.shell>.card:first-child>p{text-align:center;color:#707077}
+
+@media(max-width:620px){
+  header{
+    min-height:84px;
+    flex-direction:row;
+    align-items:center;
+    gap:10px;
+    padding-left:13px;
+    padding-right:13px;
+  }
+  header::before{width:52px;height:52px;flex-basis:52px;border-radius:12px}
+  header>div:first-of-type{min-width:0}
+  header strong{font-size:.87rem;white-space:normal}
+  header span{font-size:.68rem}
+  header .status{
+    align-self:center;
+    max-width:104px;
+    white-space:normal;
+    text-align:center;
+    line-height:1.25;
+    padding:7px 8px;
+  }
+  nav{top:84px}
+  .card{border-radius:19px}
+  .sectionTitle{margin-left:0;margin-right:0;padding-left:28px}
+  .sectionTitle::before{left:12px}
+}
+
+@media(max-width:390px){
+  header::before{width:48px;height:48px;flex-basis:48px}
+  header strong{font-size:.82rem}
+  header .status{font-size:.66rem;max-width:92px}
+  nav button{padding:9px 11px;font-size:.78rem}
+}
