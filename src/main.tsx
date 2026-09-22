@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import App from './App'
 import './styles.css'
+import './brand.css'
 
 // La app muestra las validaciones dentro del formulario. Evitamos los popups
 // nativos del navegador para no interrumpir al operador.
