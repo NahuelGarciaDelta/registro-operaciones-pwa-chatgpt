@@ -54,6 +54,13 @@ const normalizeProject = (value: string): Proyecto | null =>
   value === 'JOSE MARIA' || value === 'FILO DEL SOL' ? value : null
 
 const canonicalInterno = (value: string) => value.trim().toUpperCase().replace(/-(JM|FS)$/i, '')
+const normalizeEquipmentType = (value: string) => value
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLocaleLowerCase('es')
+const isPickupEquipment = (value: string) => normalizeEquipmentType(value).includes('camioneta')
+const isTruckOrPickupEquipment = (value: string) => normalizeEquipmentType(value).includes('camion')
 
 const projectCatalog = (data: BootstrapData | null, project: Proyecto | null): ProjectCatalog => {
   if (!data || !project) return EMPTY_CATALOG
@@ -197,6 +204,13 @@ export default function App() {
   const currentProject = normalizeProject(form.Proyecto)
   const catalog = useMemo(() => projectCatalog(data, currentProject), [data, currentProject])
   const equipment = useMemo(() => catalog.equipos.find(e => e.id === form.Interno), [catalog.equipos, form.Interno])
+  const equipmentType = equipment?.equipo || form.Equipo
+  const pickupEquipment = isPickupEquipment(equipmentType)
+  const freeTaskEquipment = isTruckOrPickupEquipment(equipmentType)
+  const initialMeterLabel = pickupEquipment ? 'Kilometraje inicial' : 'Horómetro inicial'
+  const finalMeterLabel = pickupEquipment ? 'Kilometraje final' : 'Horómetro final'
+  const totalMeterLabel = pickupEquipment ? 'Kilómetros recorridos' : 'Horas'
+  const meterNoun = pickupEquipment ? 'kilometraje' : 'horómetro'
   const tasks = useMemo(() => tasksForEquipment(data?.tareas || [], form.Equipo), [data, form.Equipo])
   const shiftRef = useMemo(
     () => form.Interno && data && currentProject
@@ -208,6 +222,10 @@ export default function App() {
   const nightAllowed = previousShift === 'TURNO DIA'
   const turnoSaveBlocked = form['Turno de trabajo'] === 'TURNO NOCHE' && (turnoBlocked || !nightAllowed)
   const hfTooLow = form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro final'] < form['Horómetro inicial']
+  const successNotice = msg.startsWith('Registro guardado en el dispositivo.')
+    || msg.includes('sincronizada(s) correctamente')
+    || msg === 'Listas actualizadas desde la fuente de datos.'
+    || msg === 'No hay cargas pendientes de sincronización.'
   const set = (k: keyof Rop02Record, v: any) => setForm(f => ({ ...f, [k]: v }))
 
   const chooseProject = (project: Proyecto) => {
@@ -424,7 +442,7 @@ export default function App() {
       }
 
       if (form['N° Parte'] == null || form['Horómetro inicial'] == null) {
-        throw new Error(`Este equipo no tiene una referencia previa de N° Parte u Horómetro inicial en ${currentProject}. Debe cargarse una referencia antes de usar el formulario.`)
+        throw new Error(`Este equipo no tiene una referencia previa de N° Parte o ${pickupEquipment ? 'kilometraje inicial' : 'horómetro inicial'} en ${currentProject}. Debe cargarse una referencia antes de usar el formulario.`)
       }
 
       const zeroHours = form['Horómetro final'] === form['Horómetro inicial']
@@ -441,7 +459,7 @@ export default function App() {
       requireField('Área', form['Area de trabajo'])
       requireField('Interno', form.Interno)
       requireField('Turno', form['Turno de trabajo'])
-      requireField('Horómetro final', form['Horómetro final'])
+      requireField(finalMeterLabel, form['Horómetro final'])
       requireField('Cambio de tareas', form['Cambio de tareas planificadas'])
       requireField('Desgaste', form['Información sobre Desgaste'])
       requireField('Combustible', form.Combustible)
@@ -477,7 +495,7 @@ export default function App() {
       }
 
       schema.parse(form)
-      if ((form['Horómetro final'] ?? 0) < form['Horómetro inicial']) throw new Error('El horómetro final no puede ser menor al inicial.')
+      if ((form['Horómetro final'] ?? 0) < form['Horómetro inicial']) throw new Error(`El ${meterNoun} final no puede ser menor al inicial.`)
 
       const item: PendingRecord = {
         id: form.ID, payload: form, signatureDataUrl: sig,
@@ -519,8 +537,8 @@ export default function App() {
           'N° Parte': 'N° Parte',
           Proyecto: 'Proyecto',
           'Area de trabajo': 'Área',
-          'Horómetro inicial': 'Horómetro inicial',
-          'Horómetro final': 'Horómetro final',
+          'Horómetro inicial': initialMeterLabel,
+          'Horómetro final': finalMeterLabel,
           'Cambio de tareas planificadas': 'Cambio de tareas',
           'Información sobre Desgaste': 'Desgaste',
           Combustible: 'Combustible',
@@ -583,37 +601,42 @@ export default function App() {
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
         <label>Turno *<SearchableSelect required value={form['Turno de trabajo']} options={['TURNO DIA', 'TURNO NOCHE']} onChange={value => value && void chooseTurno(value)} placeholder="Buscar turno…" />{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}{turnoSaveBlocked && ' Debés cambiar el turno antes de guardar.'}</small>}</label>
         <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>{currentProject ? `Automático según la última carga del equipo en ${currentProject}.` : 'Automático según la última carga del equipo en el proyecto seleccionado.'}</small></label>
-        <label>Horómetro inicial *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último horómetro final conocido.</small></label>
-        <label>Horómetro final *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El horómetro final no puede ser menor que el inicial.</small>}</label>
-        <label>Horas *<input className="locked" type="number" step="1" readOnly value={form['Cant. Hs.'] ?? ''} /></label>
+        <label>{initialMeterLabel} *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último {pickupEquipment ? 'kilometraje' : 'horómetro'} final conocido.</small></label>
+        <label>{finalMeterLabel} *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El {meterNoun} final no puede ser menor que el inicial.</small>}</label>
+        <label>{totalMeterLabel} *<input className="locked" type="number" step="1" readOnly value={form['Cant. Hs.'] ?? ''} /></label>
         {form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final'] &&
-          <label>OD / FS / EM *<SearchableSelect required value={form['OD o FS']} options={['OD', 'FS', 'EM']} onChange={value => chooseEstado(value as EstadoEquipo)} placeholder="Buscar estado…" /><small>Este campo solo aparece cuando HI = HF.</small></label>}
-        <label className="wide">Cambio de tareas *<textarea required value={form['Cambio de tareas planificadas']} onChange={e => set('Cambio de tareas planificadas', e.target.value)} /></label>
+          <label>OD / FS / EM *<SearchableSelect required value={form['OD o FS']} options={['OD', 'FS', 'EM']} onChange={value => chooseEstado(value as EstadoEquipo)} placeholder="Buscar estado…" /><small>Este campo solo aparece cuando {pickupEquipment ? 'el kilometraje inicial es igual al final' : 'HI = HF'}.</small></label>}
+        <label className="wide">Cambio de tareas *<textarea className="compactTextarea" required value={form['Cambio de tareas planificadas']} onChange={e => set('Cambio de tareas planificadas', e.target.value)} /></label>
 
         <h2 className="sectionTitle wide">CONSUMIBLES</h2>
-        <label className="wide">Desgaste *<textarea required value={form['Información sobre Desgaste']} onChange={e => set('Información sobre Desgaste', e.target.value)} /></label>
+        <label className="wide">Desgaste *<textarea className="compactTextarea" required value={form['Información sobre Desgaste']} onChange={e => set('Información sobre Desgaste', e.target.value)} /></label>
         <label>Combustible *<input required value={form.Combustible} onChange={e => set('Combustible', e.target.value)} /></label>
         <label>Aceite *<input required value={form.Aceite} onChange={e => set('Aceite', e.target.value)} /></label>
 
         <h2 className="sectionTitle wide">TAREAS REALIZADAS</h2>
         <label className="wide">Tarea 1 *{form['OD o FS']
           ? <input readOnly value={form['Tarea 1']} />
-          : <SearchableSelect required disabled={form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final']} value={form['Tarea 1']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 1', value)} placeholder="Buscar tarea…" />}
+          : freeTaskEquipment
+            ? <input required value={form['Tarea 1']} onChange={e => set('Tarea 1', e.target.value)} placeholder="Escribir tarea realizada…" />
+            : <SearchableSelect required disabled={form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final']} value={form['Tarea 1']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 1', value)} placeholder="Buscar tarea…" />}
         </label>
         <label className="wide">Observaciones 1 *<textarea required value={form['Observaciones 1']} onChange={e => set('Observaciones 1', e.target.value)} readOnly={!!form['OD o FS']} /></label>
         {!form['OD o FS'] && form['Horómetro inicial'] !== form['Horómetro final'] && form['Tarea 1'] && <>
-          <label className="wide">Tarea 2<SearchableSelect value={form['Tarea 2']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 2', value)} placeholder="Buscar tarea…" /></label>
+          <label className="wide">Tarea 2{freeTaskEquipment
+            ? <input value={form['Tarea 2']} onChange={e => set('Tarea 2', e.target.value)} placeholder="Escribir segunda tarea…" />
+            : <SearchableSelect value={form['Tarea 2']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 2', value)} placeholder="Buscar tarea…" />}
+          </label>
           {form['Tarea 2'] && <label className="wide">Observaciones 2<textarea value={form['Observaciones 2']} onChange={e => set('Observaciones 2', e.target.value)} /></label>}
         </>}
         <div className="wide"><label>Firma *</label><SignaturePad key={form.ID} onChange={setSig} /></div>
-        {msg && <div className="notice wide">{msg}</div>}
+        {msg && <div className={`notice wide${successNotice ? ' success' : ''}`}>{msg}</div>}
         <button className="primary wide" disabled={hfTooLow || turnoSaveBlocked} onClick={save}>GUARDAR REGISTRO</button>
       </section>
     </>}
 
     {tab === 'pending' && <section className="card">
       <div className="row"><h2>Pendientes</h2><button className="secondary" disabled={syncing} onClick={() => sync(true)}>{syncing ? 'Sincronizando…' : 'Sincronizar ahora'}</button></div>
-      {msg && <div className="notice">{msg}</div>}
+      {msg && <div className={`notice${successNotice ? ' success' : ''}`}>{msg}</div>}
       {pending.length === 0 ? <p>No hay cargas pendientes.</p> : pending.map(p => <article className="item" key={p.id}><b>{p.payload.Interno}</b><span>{p.payload.Operador}</span><span>{p.payload.Proyecto} · {p.payload.Fecha} · Parte {p.payload['N° Parte'] ?? 's/ref'}</span><small>{p.syncStatus}{p.lastSyncError ? ` · ${p.lastSyncError}` : ' · Guardado en este dispositivo'}</small></article>)}
     </section>}
 
