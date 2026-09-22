@@ -35,7 +35,7 @@ const schema = z.object({
   'Observaciones 1': z.string().trim().min(1)
 })
 
-const blank = (project: Proyecto = 'JOSE MARIA'): Rop02Record => ({
+const blank = (project: Proyecto | '' = ''): Rop02Record => ({
   ID: crypto.randomUUID(), Fecha: today(), Interno: '', Equipo: '', Operador: '',
   'Supervisor Delta': '', 'Supervisor Vial Cliente': '', 'Turno de trabajo': 'TURNO DIA',
   'N° Parte': null, Proyecto: project, 'Area de trabajo': 'Camino',
@@ -50,10 +50,13 @@ const formatDate = (iso: string) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : iso
 }
 
-const normalizeProject = (value: string): Proyecto => value === 'FILO DEL SOL' ? 'FILO DEL SOL' : 'JOSE MARIA'
+const normalizeProject = (value: string): Proyecto | null =>
+  value === 'JOSE MARIA' || value === 'FILO DEL SOL' ? value : null
 
-const projectCatalog = (data: BootstrapData | null, project: Proyecto): ProjectCatalog => {
-  if (!data) return EMPTY_CATALOG
+const canonicalInterno = (value: string) => value.trim().toUpperCase().replace(/-(JM|FS)$/i, '')
+
+const projectCatalog = (data: BootstrapData | null, project: Proyecto | null): ProjectCatalog => {
+  if (!data || !project) return EMPTY_CATALOG
   const scoped = data.projectCatalogs?.[project]
   if (scoped) return scoped
   if (project === 'JOSE MARIA') {
@@ -163,7 +166,6 @@ export default function App() {
       const fresh = await getBootstrap()
       setData(fresh)
       await db.catalogs.put({ key: 'bootstrap', value: fresh })
-      setForm(f => ({ ...f, Proyecto: normalizeProject(f.Proyecto) }))
       if (showResult) setMsg('Listas actualizadas desde la fuente de datos.')
     } catch (e) {
       const cached = await db.catalogs.get('bootstrap')
@@ -197,7 +199,9 @@ export default function App() {
   const equipment = useMemo(() => catalog.equipos.find(e => e.id === form.Interno), [catalog.equipos, form.Interno])
   const tasks = useMemo(() => tasksForEquipment(data?.tareas || [], form.Equipo), [data, form.Equipo])
   const shiftRef = useMemo(
-    () => form.Interno && data ? provisionalReference(form.Interno, catalog.equipmentState, pending, currentProject) : null,
+    () => form.Interno && data && currentProject
+      ? provisionalReference(form.Interno, catalog.equipmentState, pending, currentProject)
+      : null,
     [form.Interno, data, catalog.equipmentState, pending, currentProject]
   )
   const previousShift = shiftRef?.turnoAnterior || null
@@ -240,7 +244,7 @@ export default function App() {
     return provisionalReference(interno, freshCatalog.equipmentState, pending, project)
   }
 
-  const chooseInterno = async (v: string, project: Proyecto = currentProject) => {
+  const chooseInterno = async (v: string, project: Proyecto) => {
     if (!data) return
     if (qrLock && (v !== qrLock.interno || project !== qrLock.proyecto)) return
     setTurnoBlocked(false)
@@ -278,28 +282,59 @@ export default function App() {
   useEffect(() => {
     if (!data || qrHandled.current) return
     const params = new URLSearchParams(window.location.search)
-    const interno = params.get('interno')?.trim().toUpperCase()
-    if (!interno) {
+    const rawInterno = params.get('interno')?.trim().toUpperCase()
+    if (!rawInterno) {
       qrHandled.current = true
       return
     }
 
+    const key = canonicalInterno(rawInterno)
     const requestedProjectRaw = params.get('proyecto')?.trim().toUpperCase()
     const requestedProject = PROJECTS.find(p => p === requestedProjectRaw)
     const availableProjects = (data.projects?.length ? data.projects : PROJECTS) as Proyecto[]
-    const targetProject = requestedProject && projectCatalog(data, requestedProject).equipos.some(e => e.id.toUpperCase() === interno)
-      ? requestedProject
-      : availableProjects.find(project => projectCatalog(data, project).equipos.some(e => e.id.toUpperCase() === interno))
+
+    const exactMatches = availableProjects.flatMap(project =>
+      projectCatalog(data, project).equipos
+        .filter(e => e.id.trim().toUpperCase() === rawInterno)
+        .map(e => ({ project, equipment: e }))
+    )
+
+    const canonicalMatches = availableProjects.flatMap(project =>
+      projectCatalog(data, project).equipos
+        .filter(e => canonicalInterno(e.id) === key)
+        .map(e => ({ project, equipment: e }))
+    )
+
+    let target: { project: Proyecto; equipment: { id: string; equipo: string } } | undefined
+
+    if (requestedProject) {
+      target = exactMatches.find(x => x.project === requestedProject)
+        || canonicalMatches.find(x => x.project === requestedProject)
+    }
+
+    if (!target) {
+      if (exactMatches.length === 1) target = exactMatches[0]
+      else if (exactMatches.length > 1) {
+        qrHandled.current = true
+        setMsg(`El equipo ${key} figura simultáneamente en EQUIPOS JM y EQUIPOS FS. Dejá el equipo solamente en el proyecto donde está operando antes de cargar.`)
+        return
+      } else if (canonicalMatches.length === 1) target = canonicalMatches[0]
+      else if (canonicalMatches.length > 1) {
+        qrHandled.current = true
+        setMsg(`El equipo ${key} figura simultáneamente en EQUIPOS JM y EQUIPOS FS. Dejá el equipo solamente en el proyecto donde está operando antes de cargar.`)
+        return
+      }
+    }
 
     qrHandled.current = true
-    if (!targetProject) {
-      setMsg(`El equipo indicado por el QR (${interno}) no está cargado en EQUIPOS JM ni EQUIPOS FS.`)
+    if (!target) {
+      setMsg(`El equipo indicado por el QR (${key}) no está cargado en EQUIPOS JM ni EQUIPOS FS.`)
       return
     }
 
-    setQrLock({ interno, proyecto: targetProject })
+    setQrLock({ interno: target.equipment.id, proyecto: target.project })
     setTab('form')
-    void chooseInterno(interno, targetProject)
+    void chooseInterno(target.equipment.id, target.project)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 
@@ -316,6 +351,12 @@ export default function App() {
     if (!form.Interno) {
       setTurnoBlocked(true)
       setMsg('Primero seleccioná un equipo antes de elegir TURNO NOCHE.')
+      return
+    }
+
+    if (!currentProject) {
+      setTurnoBlocked(true)
+      setMsg('Primero seleccioná un proyecto antes de elegir TURNO NOCHE.')
       return
     }
 
@@ -370,6 +411,10 @@ export default function App() {
 
   const save = async () => {
     try {
+      if (!currentProject) {
+        throw new Error('Seleccioná un proyecto antes de guardar el registro.')
+      }
+
       if (qrLock && (currentProject !== qrLock.proyecto || form.Interno !== qrLock.interno)) {
         throw new Error('El proyecto y el equipo de una carga iniciada por QR no pueden modificarse.')
       }
@@ -456,7 +501,7 @@ export default function App() {
         next['Horómetro inicial'] = ref.hi
         setForm(next)
       } else {
-        setForm(blank(currentProject))
+        setForm(blank())
       }
 
       await reloadPending()
@@ -517,31 +562,32 @@ export default function App() {
           ? <><input className="locked" readOnly value={qrLock.proyecto === 'JOSE MARIA' ? 'JOSÉ MARÍA' : 'FILO DEL SOL'} /><small>Asignado automáticamente por el QR del equipo.</small></>
           : <SearchableSelect
               required
-              value={currentProject}
+              value={form.Proyecto}
               options={projectOptions.map(project => ({ value: project, label: project === 'JOSE MARIA' ? 'JOSÉ MARÍA' : 'FILO DEL SOL' }))}
               onChange={value => value && chooseProject(value as Proyecto)}
-              placeholder="Escribí el proyecto…"
+              displayPlaceholder="Seleccionar proyecto…"
+              placeholder="Buscar proyecto…"
             />}
         </label>
         <label>Fecha *<input required type="date" value={form.Fecha} onChange={e => set('Fecha', e.target.value)} /></label>
-        <label>Operador *<SearchableSelect required value={form.Operador} options={data.operadores} onChange={value => { set('Operador', value); if (value) setLastOperator(value) }} placeholder="Escribí nombre o apellido…" /></label>
-        <label>Supervisor Delta *<SearchableSelect required value={form['Supervisor Delta']} options={catalog.supervisoresDelta} onChange={value => set('Supervisor Delta', value)} placeholder="Escribí para buscar…" /></label>
-        <label>Supervisor Vial Cliente *<SearchableSelect required value={form['Supervisor Vial Cliente']} options={catalog.supervisoresCliente} onChange={value => set('Supervisor Vial Cliente', value)} placeholder="Escribí para buscar…" /></label>
-        <label>Área *<SearchableSelect required value={form['Area de trabajo']} options={data.areas} onChange={value => set('Area de trabajo', value)} placeholder="Escribí para buscar…" /></label>
+        <label>Operador *<SearchableSelect required value={form.Operador} options={data.operadores} onChange={value => { set('Operador', value); if (value) setLastOperator(value) }} placeholder="Buscar nombre o apellido…" /></label>
+        <label>Supervisor Delta *<SearchableSelect required disabled={!currentProject} value={form['Supervisor Delta']} options={catalog.supervisoresDelta} onChange={value => set('Supervisor Delta', value)} placeholder="Buscar supervisor…" /></label>
+        <label>Supervisor Vial Cliente *<SearchableSelect required disabled={!currentProject} value={form['Supervisor Vial Cliente']} options={catalog.supervisoresCliente} onChange={value => set('Supervisor Vial Cliente', value)} placeholder="Buscar supervisor…" /></label>
+        <label>Área *<SearchableSelect required value={form['Area de trabajo']} options={data.areas} onChange={value => set('Area de trabajo', value)} placeholder="Buscar área…" /></label>
 
         <h2 className="sectionTitle wide">DATOS DEL EQUIPO</h2>
         <label>Interno *{qrLock
           ? <><input className="locked" readOnly value={qrLock.interno} /><small>Equipo fijado por el QR escaneado.</small></>
-          : <SearchableSelect required value={form.Interno} options={catalog.equipos.map(e => e.id)} onChange={value => void chooseInterno(value)} placeholder="Escribí interno…" />}
+          : <SearchableSelect required disabled={!currentProject} value={form.Interno} options={catalog.equipos.map(e => e.id)} onChange={value => currentProject && void chooseInterno(value, currentProject)} placeholder="Buscar interno…" />}
         </label>
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
-        <label>Turno *<SearchableSelect required value={form['Turno de trabajo']} options={['TURNO DIA', 'TURNO NOCHE']} onChange={value => value && void chooseTurno(value)} placeholder="Escribí turno…" />{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}{turnoSaveBlocked && ' Debés cambiar el turno antes de guardar.'}</small>}</label>
-        <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>Automático según la última carga del equipo en {currentProject}.</small></label>
+        <label>Turno *<SearchableSelect required value={form['Turno de trabajo']} options={['TURNO DIA', 'TURNO NOCHE']} onChange={value => value && void chooseTurno(value)} placeholder="Buscar turno…" />{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}{turnoSaveBlocked && ' Debés cambiar el turno antes de guardar.'}</small>}</label>
+        <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>{currentProject ? `Automático según la última carga del equipo en ${currentProject}.` : 'Automático según la última carga del equipo en el proyecto seleccionado.'}</small></label>
         <label>Horómetro inicial *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último horómetro final conocido.</small></label>
         <label>Horómetro final *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El horómetro final no puede ser menor que el inicial.</small>}</label>
         <label>Horas *<input className="locked" type="number" step="1" readOnly value={form['Cant. Hs.'] ?? ''} /></label>
         {form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final'] &&
-          <label>OD / FS / EM *<SearchableSelect required value={form['OD o FS']} options={['OD', 'FS', 'EM']} onChange={value => chooseEstado(value as EstadoEquipo)} placeholder="Escribí estado…" /><small>Este campo solo aparece cuando HI = HF.</small></label>}
+          <label>OD / FS / EM *<SearchableSelect required value={form['OD o FS']} options={['OD', 'FS', 'EM']} onChange={value => chooseEstado(value as EstadoEquipo)} placeholder="Buscar estado…" /><small>Este campo solo aparece cuando HI = HF.</small></label>}
         <label className="wide">Cambio de tareas *<textarea required value={form['Cambio de tareas planificadas']} onChange={e => set('Cambio de tareas planificadas', e.target.value)} /></label>
 
         <h2 className="sectionTitle wide">CONSUMIBLES</h2>
@@ -552,11 +598,11 @@ export default function App() {
         <h2 className="sectionTitle wide">TAREAS REALIZADAS</h2>
         <label className="wide">Tarea 1 *{form['OD o FS']
           ? <input readOnly value={form['Tarea 1']} />
-          : <SearchableSelect required disabled={form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final']} value={form['Tarea 1']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 1', value)} placeholder="Escribí para filtrar tareas…" />}
+          : <SearchableSelect required disabled={form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final']} value={form['Tarea 1']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 1', value)} placeholder="Buscar tarea…" />}
         </label>
         <label className="wide">Observaciones 1 *<textarea required value={form['Observaciones 1']} onChange={e => set('Observaciones 1', e.target.value)} readOnly={!!form['OD o FS']} /></label>
         {!form['OD o FS'] && form['Horómetro inicial'] !== form['Horómetro final'] && form['Tarea 1'] && <>
-          <label className="wide">Tarea 2<SearchableSelect value={form['Tarea 2']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 2', value)} placeholder="Escribí para filtrar tareas…" /></label>
+          <label className="wide">Tarea 2<SearchableSelect value={form['Tarea 2']} options={tasks.map(t => t.tarea)} onChange={value => set('Tarea 2', value)} placeholder="Buscar tarea…" /></label>
           {form['Tarea 2'] && <label className="wide">Observaciones 2<textarea value={form['Observaciones 2']} onChange={e => set('Observaciones 2', e.target.value)} /></label>}
         </>}
         <div className="wide"><label>Firma *</label><SignaturePad key={form.ID} onChange={setSig} /></div>
@@ -643,7 +689,7 @@ function Receipts({ operators, defaultOperator }: { operators: string[], default
     <p>Seleccioná un operador. Los comprobantes se consultan directamente desde las planillas R_OP02_JM y R_OP02_FS.</p>
 
     <label>Operador
-      <SearchableSelect value={operator} options={sortedOperators} onChange={setOperator} placeholder="Escribí nombre o apellido…" />
+      <SearchableSelect value={operator} options={sortedOperators} onChange={setOperator} placeholder="Buscar nombre o apellido…" />
     </label>
 
     <div className="formToolbar">
