@@ -20,6 +20,26 @@ class RopDb extends Dexie {
     this.version(3)
       .stores({ catalogs: 'key', syncQueue: 'id,createdAt,syncStatus', syncedRecords: 'id,syncedAt' })
       .upgrade(tx => tx.table('syncQueue').clear())
+    // Limpieza puntual solicitada: elimina únicamente el pendiente de Almonacid Gabriel,
+    // MOT-0090-JM, parte 23, José María. No afecta ningún otro registro pendiente.
+    this.version(4)
+      .stores({ catalogs: 'key', syncQueue: 'id,createdAt,syncStatus', syncedRecords: 'id,syncedAt' })
+      .upgrade(async tx => {
+        const queue = tx.table('syncQueue')
+        const rows = await queue.toArray()
+        const normalize = (value: unknown) => String(value ?? '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+          .toLocaleLowerCase('es')
+        const targets = rows.filter((row: PendingRecord) =>
+          normalize(row.payload.Interno) === 'mot-0090-jm'
+          && normalize(row.payload.Operador) === 'almonacid gabriel'
+          && row.payload['N° Parte'] === 23
+          && normalize(row.payload.Proyecto) === 'jose maria'
+        )
+        await Promise.all(targets.map((row: PendingRecord) => queue.delete(row.id)))
+      })
   }
 }
 export const db = new RopDb()
