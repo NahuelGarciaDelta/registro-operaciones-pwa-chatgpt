@@ -405,6 +405,8 @@ h2{margin:0 0 12px;color:#18181a;font-size:1.05rem;letter-spacing:-.01em}
   .card{padding:15px;border-radius:16px}
   .sectionTitle{margin-left:-15px;margin-right:-15px;padding-left:29px}
   .sectionTitle::before{left:15px}
+  input,select,textarea,.searchInput{font-size:16px;line-height:1.25}
+  .searchSelectTrigger,.searchOption{font-size:16px}
 }
 
 @media(prefers-reduced-motion:reduce){
