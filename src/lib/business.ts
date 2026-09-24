@@ -27,11 +27,20 @@ export function provisionalReference(interno: string, states: EquipmentState[], 
     }
   }
 
+  if (!server) {
+    return {
+      parte: 1,
+      hi: null,
+      turnoAnterior: null,
+      source: 'none' as const
+    }
+  }
+
   return {
-    parte: server?.ultimoNumeroParte == null ? null : server.ultimoNumeroParte + 1,
-    hi: server?.ultimoHorometroFinal ?? null,
-    turnoAnterior: server?.ultimoTurno ?? null,
-    source: server ? 'sync' as const : 'none' as const
+    parte: server.ultimoNumeroParte == null ? null : server.ultimoNumeroParte + 1,
+    hi: server.ultimoHorometroFinal ?? null,
+    turnoAnterior: server.ultimoTurno ?? null,
+    source: 'sync' as const
   }
 }
 
