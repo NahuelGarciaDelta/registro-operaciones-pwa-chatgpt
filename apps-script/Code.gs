@@ -324,22 +324,29 @@ function createRecord_(body) {
       }
     }
 
-    if (!best || best.part == null || best.hf == null) {
-      throw new Error('No existe una referencia previa válida de N° Parte y Horómetro final para ' + interno + ' en ' + p.Proyecto + '.');
+    const firstRecord = !best;
+    if (best && (best.part == null || best.hf == null)) {
+      throw new Error('Existe un registro anterior para ' + interno + ', pero no tiene una referencia válida de N° Parte y Horómetro final. Corregí la planilla antes de continuar.');
     }
 
     const turno = clean_(p['Turno de trabajo']);
     if (['TURNO DIA', 'TURNO NOCHE'].indexOf(turno) === -1) {
       throw new Error('Turno inválido. Debe ser TURNO DIA o TURNO NOCHE.');
     }
-    if (turno === 'TURNO NOCHE' && best.turno !== 'TURNO DIA') {
-      const anterior = best.turno || 'sin turno informado';
+    if (turno === 'TURNO NOCHE' && (firstRecord || best.turno !== 'TURNO DIA')) {
+      const anterior = firstRecord ? 'sin registro anterior' : (best.turno || 'sin turno informado');
       throw new Error('No se puede cargar TURNO NOCHE para ' + interno + '. El registro anterior debe ser TURNO DIA y actualmente figura como ' + anterior + '.');
     }
     p['Turno de trabajo'] = turno;
 
-    p['N° Parte'] = best.part + 1;
-    p['Horómetro inicial'] = best.hf;
+    if (firstRecord) {
+      p['N° Parte'] = 1;
+      // Para el primer parte de un equipo nuevo, el horómetro/kilometraje inicial
+      // viene informado manualmente desde el formulario.
+    } else {
+      p['N° Parte'] = best.part + 1;
+      p['Horómetro inicial'] = best.hf;
+    }
 
     const hi = int_(p['Horómetro inicial']);
     const hf = int_(p['Horómetro final']);
