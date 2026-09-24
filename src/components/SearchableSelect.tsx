@@ -52,14 +52,22 @@ export default function SearchableSelect({
       .slice(0, 60)
   }, [normalizedOptions, query])
 
+  const blurActiveElement = () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement) active.blur()
+  }
+
   const close = () => {
     setOpen(false)
     setQuery('')
+    blurActiveElement()
   }
 
   const select = (option: { value: string; label: string }) => {
+    setOpen(false)
+    setQuery('')
     onChange(option.value)
-    close()
+    blurActiveElement()
   }
 
   const toggle = () => {
@@ -108,7 +116,10 @@ export default function SearchableSelect({
             }
             if (e.key === 'Escape') close()
           }}
-          onBlur={() => window.setTimeout(close, 140)}
+          onBlur={() => window.setTimeout(() => {
+            setOpen(false)
+            setQuery('')
+          }, 140)}
         />
       </div>
 
@@ -117,7 +128,7 @@ export default function SearchableSelect({
           key={option.value}
           type="button"
           className={option.value === value ? 'searchOption selected' : 'searchOption'}
-          onMouseDown={e => e.preventDefault()}
+          onPointerDown={e => e.preventDefault()}
           onClick={() => select(option)}
         >{option.label}</button>) : <div className="searchEmpty">{emptyText}</div>}
       </div>
