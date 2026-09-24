@@ -218,6 +218,7 @@ export default function App() {
       : null,
     [form.Interno, data, catalog.equipmentState, pending, currentProject]
   )
+  const newEquipment = shiftRef?.source === 'none'
   const previousShift = shiftRef?.turnoAnterior || null
   const nightAllowed = previousShift === 'TURNO DIA'
   const turnoSaveBlocked = form['Turno de trabajo'] === 'TURNO NOCHE' && (turnoBlocked || !nightAllowed)
@@ -407,6 +408,26 @@ export default function App() {
     }))
   }
 
+  const changeHorometroInicial = (raw: string) => {
+    if (raw !== '' && !/^\d+$/.test(raw)) return
+    const hi = raw === '' ? null : Number(raw)
+    setForm(f => {
+      const hf = f['Horómetro final']
+      const isZeroHours = hi != null && hf != null && hf === hi
+      const wasEstado = !!f['OD o FS']
+      return {
+        ...f,
+        'Horómetro inicial': hi,
+        'Cant. Hs.': calcHours(hi, hf),
+        'OD o FS': isZeroHours ? (wasEstado ? f['OD o FS'] : '') : '',
+        'Tarea 1': isZeroHours ? (wasEstado ? f['Tarea 1'] : '') : (wasEstado ? '' : f['Tarea 1']),
+        'Observaciones 1': isZeroHours ? (wasEstado ? f['Observaciones 1'] : '') : (wasEstado ? '' : f['Observaciones 1']),
+        'Tarea 2': isZeroHours || wasEstado ? '' : f['Tarea 2'],
+        'Observaciones 2': isZeroHours || wasEstado ? '' : f['Observaciones 2']
+      }
+    })
+  }
+
   const changeHorometroFinal = (raw: string) => {
     if (raw !== '' && !/^\d+$/.test(raw)) return
     const hf = raw === '' ? null : Number(raw)
@@ -441,11 +462,13 @@ export default function App() {
         throw new Error('No se puede guardar este registro mientras el turno sea TURNO NOCHE. Cambiá el turno a TURNO DIA para continuar.')
       }
 
-      if (form['N° Parte'] == null || form['Horómetro inicial'] == null) {
-        throw new Error(`Este equipo no tiene una referencia previa de N° Parte o ${pickupEquipment ? 'kilometraje inicial' : 'horómetro inicial'} en ${currentProject}. Debe cargarse una referencia antes de usar el formulario.`)
+      if (form['N° Parte'] == null) {
+        throw new Error(`No se pudo determinar el N° de parte para ${form.Interno || 'el equipo seleccionado'}. Actualizá las listas e intentá nuevamente.`)
       }
 
-      const zeroHours = form['Horómetro final'] === form['Horómetro inicial']
+      const zeroHours = form['Horómetro inicial'] != null
+        && form['Horómetro final'] != null
+        && form['Horómetro final'] === form['Horómetro inicial']
       const missing: string[] = []
       const requireField = (label: string, value: unknown) => {
         if (value == null || (typeof value === 'string' && !value.trim())) missing.push(label)
@@ -459,6 +482,7 @@ export default function App() {
       requireField('Área', form['Area de trabajo'])
       requireField('Interno', form.Interno)
       requireField('Turno', form['Turno de trabajo'])
+      requireField(initialMeterLabel, form['Horómetro inicial'])
       requireField(finalMeterLabel, form['Horómetro final'])
       requireField('Cambio de tareas', form['Cambio de tareas planificadas'])
       requireField('Desgaste', form['Información sobre Desgaste'])
@@ -495,7 +519,10 @@ export default function App() {
       }
 
       schema.parse(form)
-      if ((form['Horómetro final'] ?? 0) < form['Horómetro inicial']) throw new Error(`El ${meterNoun} final no puede ser menor al inicial.`)
+      const hi = form['Horómetro inicial']
+      const hf = form['Horómetro final']
+      if (hi == null || hf == null) throw new Error(`Completá ${initialMeterLabel} y ${finalMeterLabel}.`)
+      if (hf < hi) throw new Error(`El ${meterNoun} final no puede ser menor al inicial.`)
 
       const item: PendingRecord = {
         id: form.ID, payload: form, signatureDataUrl: sig,
@@ -600,8 +627,17 @@ export default function App() {
         </label>
         <label>Equipo *<input readOnly value={equipment?.equipo || form.Equipo} /></label>
         <label>Turno *<SearchableSelect required value={form['Turno de trabajo']} options={['TURNO DIA', 'TURNO NOCHE']} onChange={value => value && void chooseTurno(value)} placeholder="Buscar turno…" />{form.Interno && <small>{previousShift ? `Último turno registrado: ${previousShift}.` : 'No hay turno anterior disponible.'} {!nightAllowed && ' El turno noche requiere un turno día inmediatamente anterior.'}{turnoSaveBlocked && ' Debés cambiar el turno antes de guardar.'}</small>}</label>
-        <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>{currentProject ? `Automático según la última carga del equipo en ${currentProject}.` : 'Automático según la última carga del equipo en el proyecto seleccionado.'}</small></label>
-        <label>{initialMeterLabel} *<input className="locked" type="number" step="1" readOnly value={form['Horómetro inicial'] ?? ''} placeholder="Sin referencia" /><small>Automático: último {pickupEquipment ? 'kilometraje' : 'horómetro'} final conocido.</small></label>
+        <label>N° Parte *<input className="locked" type="number" step="1" readOnly value={form['N° Parte'] ?? ''} placeholder="Sin referencia" /><small>{newEquipment ? 'Equipo nuevo: se inicia automáticamente en parte 1.' : currentProject ? `Automático según la última carga del equipo en ${currentProject}.` : 'Automático según la última carga del equipo en el proyecto seleccionado.'}</small></label>
+        <label>{initialMeterLabel} *<input
+          className={newEquipment ? '' : 'locked'}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          readOnly={!newEquipment}
+          value={form['Horómetro inicial'] ?? ''}
+          onChange={e => newEquipment && changeHorometroInicial(e.target.value)}
+          placeholder={newEquipment ? `Ingresar ${pickupEquipment ? 'kilometraje' : 'horómetro'} inicial` : 'Sin referencia'}
+        /><small>{newEquipment ? `Equipo nuevo sin registros anteriores: ingresá manualmente el ${pickupEquipment ? 'kilometraje' : 'horómetro'} inicial. Desde el segundo parte será automático.` : `Automático: último ${pickupEquipment ? 'kilometraje' : 'horómetro'} final conocido.`}</small></label>
         <label>{finalMeterLabel} *<input required className={hfTooLow ? 'invalidField' : ''} type="text" inputMode="numeric" pattern="[0-9]*" value={form['Horómetro final'] ?? ''} onChange={e => changeHorometroFinal(e.target.value)} placeholder="Ingresar número entero" />{hfTooLow && <small className="fieldError">El {meterNoun} final no puede ser menor que el inicial.</small>}</label>
         <label>{totalMeterLabel} *<input className="locked" type="number" step="1" readOnly value={form['Cant. Hs.'] ?? ''} /></label>
         {form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro inicial'] === form['Horómetro final'] &&
