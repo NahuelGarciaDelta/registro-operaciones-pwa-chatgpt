@@ -16,6 +16,13 @@ describe('ROP02 business rules', () => {
     expect(ref.hi).toBe(1763)
     expect(ref.turnoAnterior).toBe('TURNO DIA')
   })
+  it('starts new equipment at part 1 with an open initial meter', () => {
+    const ref = provisionalReference('NEW-0001', [], [])
+    expect(ref.parte).toBe(1)
+    expect(ref.hi).toBeNull()
+    expect(ref.turnoAnterior).toBeNull()
+    expect(ref.source).toBe('none')
+  })
   it('uses pending part and HF but keeps the confirmed server shift for night authorization', () => {
     const ref = provisionalReference('CAV-0114-JM', [{interno:'CAV-0114-JM',ultimoNumeroParte:273,ultimoHorometroFinal:1763,fechaUltimoRegistro:'2026-09-18',ultimoTurno:'TURNO DIA'}], [{
       id: '1',
