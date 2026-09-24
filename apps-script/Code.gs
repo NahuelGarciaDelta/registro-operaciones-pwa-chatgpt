@@ -115,6 +115,20 @@ function rows_(name) {
 function clean_(v) { return v == null ? '' : String(v).trim(); }
 function unique_(arr) { return [...new Set(arr.filter(Boolean))]; }
 
+function comparable_(v) {
+  return clean_(v)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('es')
+    .replace(/\s+/g, ' ');
+}
+
+function canonicalListValue_(value, validValues) {
+  const target = comparable_(value);
+  if (!target) return '';
+  return validValues.find(item => comparable_(item) === target) || '';
+}
+
 function projectConfig_(project) {
   const key = clean_(project);
   const cfg = PROJECT_CONFIG[key];
@@ -275,14 +289,18 @@ function createRecord_(body) {
     }
 
     const validSupDelta = unique_(rows_(cfg.supervisoresSheet).slice(1).map(r => clean_(r[1])));
-    if (validSupDelta.indexOf(clean_(p['Supervisor Delta'])) === -1) {
+    const canonicalSupDelta = canonicalListValue_(p['Supervisor Delta'], validSupDelta);
+    if (!canonicalSupDelta) {
       throw new Error('Supervisor Delta inválido para el proyecto ' + p.Proyecto + '.');
     }
+    p['Supervisor Delta'] = canonicalSupDelta;
 
     const validSupCliente = valuesFromSingleColumnSheet_(cfg.supervisoresClienteSheet);
-    if (validSupCliente.indexOf(clean_(p['Supervisor Vial Cliente'])) === -1) {
+    const canonicalSupCliente = canonicalListValue_(p['Supervisor Vial Cliente'], validSupCliente);
+    if (!canonicalSupCliente) {
       throw new Error('Supervisor Vial Cliente inválido para el proyecto ' + p.Proyecto + '.');
     }
+    p['Supervisor Vial Cliente'] = canonicalSupCliente;
 
     const interno = clean_(p.Interno);
     const fecha = dateISO_(p.Fecha);
