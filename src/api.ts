@@ -56,6 +56,14 @@ export async function getBootstrapLive(): Promise<BootstrapData> {
 }
 
 export async function getBootstrap(): Promise<BootstrapData> {
+  // Sin Internet no esperamos el timeout del backend. App.tsx capturará este error
+  // y utilizará inmediatamente el catálogo guardado en IndexedDB del dispositivo.
+  // Esto es clave para que al escanear un QR offline se seleccione el equipo y se
+  // calculen N° Parte/HI con el último estado que ese teléfono tenga sincronizado.
+  if (!navigator.onLine) {
+    throw new Error('Sin conexión. Usar catálogo local guardado en el dispositivo.')
+  }
+
   try {
     return await getBootstrapLive()
   } catch {
