@@ -2,16 +2,34 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-function welcomeMessagePlugin(): Plugin {
+function appUiFixesPlugin(): Plugin {
   return {
-    name: 'delta-welcome-message',
+    name: 'delta-app-ui-fixes',
     enforce: 'pre',
     transform(code, id) {
       if (!/[\\/]src[\\/]App\.tsx$/.test(id)) return null
-      return code.replace(
+
+      let transformed = code.replace(
         '<p>La primera apertura requiere internet.</p>',
         '<p>Bienvenido a la aplicación de Registro de Operaciones de DELTA MINING.</p>'
       )
+
+      // Apenas el servidor confirma el registro, mostrar primero la confirmación y
+      // recién después liberar el botón. Las tareas posteriores ya no condicionan
+      // el feedback visual del operador.
+      transformed = transformed.replace(
+        "      } finally {\n        setSaving(false)\n      }\n\n      await db.syncQueue.delete(item.id).catch(() => undefined)",
+        "      }\n\n      setMsg('REGISTRO GUARDADO CORRECTAMENTE. El registro ya está confirmado en la planilla y disponible para otros dispositivos. El comprobante queda disponible en Comprobantes.')\n      await new Promise(resolve => setTimeout(resolve, 0))\n      setSaving(false)\n\n      await db.syncQueue.delete(item.id).catch(() => undefined)"
+      )
+
+      // Respaldo visual: mientras siga mostrándose el estado de guardado, el botón
+      // continúa bloqueado y conserva el texto GUARDANDO… aunque saving ya haya cambiado.
+      transformed = transformed.replace(
+        'disabled={saving || hfTooLow || turnoSaveBlocked} onClick={save}>{saving ? \'GUARDANDO…\' : \'GUARDAR REGISTRO\'}',
+        "disabled={saving || msg === 'Guardando y confirmando en el servidor…' || hfTooLow || turnoSaveBlocked} onClick={save}>{saving || msg === 'Guardando y confirmando en el servidor…' ? 'GUARDANDO…' : 'GUARDAR REGISTRO'}"
+      )
+
+      return transformed
     }
   }
 }
@@ -68,7 +86,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
     plugins: [
-      welcomeMessagePlugin(),
+      appUiFixesPlugin(),
       react(),
       localBackendProxy(env),
       VitePWA({
