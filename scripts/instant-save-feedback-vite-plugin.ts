@@ -7,10 +7,6 @@ export default function instantSaveFeedbackPlugin(): Plugin {
     transform(code, id) {
       if (!/[\\/]src[\\/]App\.tsx$/.test(id)) return null
 
-      const earlyUnlock = `      } finally {
-        setSaving(false)
-      }`
-
       const before = `      await db.syncQueue.delete(item.id).catch(() => undefined)
       await reloadPending()
 
@@ -71,7 +67,8 @@ export default function instantSaveFeedbackPlugin(): Plugin {
         setForm(blank())
       }
 
-      // El botón sigue en GUARDANDO… hasta el mismo render que muestra la confirmación.
+      // El éxito se muestra antes de desbloquear el botón para evitar doble carga
+      // y para que el operador vea una confirmación inequívoca del servidor.
       setMsg('REGISTRO GUARDADO CORRECTAMENTE. El registro ya está confirmado en la planilla y disponible para otros dispositivos. El comprobante queda disponible en Comprobantes.')
       setSaving(false)
 
@@ -88,17 +85,21 @@ export default function instantSaveFeedbackPlugin(): Plugin {
         } catch { /* el registro ya quedó confirmado; se refrescará más adelante */ }
       })()`
 
-      if (!code.includes(earlyUnlock)) {
-        throw new Error('No se encontró el desbloqueo temprano de guardado en src/App.tsx.')
-      }
       if (!code.includes(before)) {
         throw new Error('No se encontró el bloque de posguardado esperado en src/App.tsx. Revisar instant-save-feedback-vite-plugin.ts.')
       }
 
-      const withoutEarlyUnlock = code.replace(earlyUnlock, '      }')
+      let transformed = code.replace(before, after)
+
+      const initialMessage = '<p>La primera apertura requiere internet.</p>'
+      const welcomeMessage = '<p>Bienvenido a la aplicación de Registro de Operaciones de DELTA MINING.</p>'
+      if (!transformed.includes(initialMessage)) {
+        throw new Error('No se encontró el mensaje inicial esperado en src/App.tsx.')
+      }
+      transformed = transformed.replace(initialMessage, welcomeMessage)
 
       return {
-        code: withoutEarlyUnlock.replace(before, after),
+        code: transformed,
         map: null
       }
     }
