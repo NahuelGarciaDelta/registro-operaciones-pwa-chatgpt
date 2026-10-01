@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
-import instantSaveFeedbackPlugin from './scripts/instant-save-feedback-vite-plugin'
 
 function localBackendProxy(env: Record<string, string>): Plugin {
   return {
@@ -55,7 +54,6 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
     plugins: [
-      instantSaveFeedbackPlugin(),
       react(),
       localBackendProxy(env),
       VitePWA({
