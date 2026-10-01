@@ -51,26 +51,30 @@ async function jsonOrThrow(r: Response) {
 }
 
 export async function getBootstrapLive(): Promise<BootstrapData> {
-  const r = await fetchWithTimeout(`${base}?action=bootstrap&_=${Date.now()}`, { cache: 'no-store' }, CHECK_TIMEOUT_MS)
+  const r = await fetchWithTimeout(
+    `${base}?action=bootstrap&_=${Date.now()}`,
+    {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache'
+      }
+    },
+    CHECK_TIMEOUT_MS
+  )
   return await jsonOrThrow(r)
 }
 
 export async function getBootstrap(): Promise<BootstrapData> {
-  // Sin Internet no esperamos el timeout del backend. App.tsx capturará este error
-  // y utilizará inmediatamente el catálogo guardado en IndexedDB del dispositivo.
-  // Esto es clave para que al escanear un QR offline se seleccione el equipo y se
-  // calculen N° Parte/HI con el último estado que ese teléfono tenga sincronizado.
+  // La app mantiene una copia local en IndexedDB para poder abrirse sin señal.
+  // Pero cuando hay Internet, "Actualizar listas" debe significar realmente
+  // consultar la fuente central. No usamos bootstrap.json como fallback silencioso,
+  // porque podía mostrar datos viejos y aun así informar que las listas se actualizaron.
   if (!navigator.onLine) {
     throw new Error('Sin conexión. Usar catálogo local guardado en el dispositivo.')
   }
 
-  try {
-    return await getBootstrapLive()
-  } catch {
-    const r = await fetch(`/bootstrap.json?v=${Date.now()}`, { cache: 'no-store' })
-    if (!r.ok) throw new Error('No se pudieron cargar las listas de la planilla ni el respaldo local.')
-    return await r.json()
-  }
+  return await getBootstrapLive()
 }
 
 export async function createRecord(item: PendingRecord): Promise<Rop02Record> {
