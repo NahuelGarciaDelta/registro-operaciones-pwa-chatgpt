@@ -7,6 +7,10 @@ export default function instantSaveFeedbackPlugin(): Plugin {
     transform(code, id) {
       if (!/[\\/]src[\\/]App\.tsx$/.test(id)) return null
 
+      const earlyUnlock = `      } finally {
+        setSaving(false)
+      }`
+
       const before = `      await db.syncQueue.delete(item.id).catch(() => undefined)
       await reloadPending()
 
@@ -67,8 +71,9 @@ export default function instantSaveFeedbackPlugin(): Plugin {
         setForm(blank())
       }
 
-      // El éxito se muestra apenas el servidor confirmó el registro.
+      // El botón sigue en GUARDANDO… hasta el mismo render que muestra la confirmación.
       setMsg('REGISTRO GUARDADO CORRECTAMENTE. El registro ya está confirmado en la planilla y disponible para otros dispositivos. El comprobante queda disponible en Comprobantes.')
+      setSaving(false)
 
       // Limpieza local y refresco global en segundo plano: no hacen esperar al operador.
       void db.syncQueue.delete(item.id)
@@ -83,12 +88,17 @@ export default function instantSaveFeedbackPlugin(): Plugin {
         } catch { /* el registro ya quedó confirmado; se refrescará más adelante */ }
       })()`
 
+      if (!code.includes(earlyUnlock)) {
+        throw new Error('No se encontró el desbloqueo temprano de guardado en src/App.tsx.')
+      }
       if (!code.includes(before)) {
         throw new Error('No se encontró el bloque de posguardado esperado en src/App.tsx. Revisar instant-save-feedback-vite-plugin.ts.')
       }
 
+      const withoutEarlyUnlock = code.replace(earlyUnlock, '      }')
+
       return {
-        code: code.replace(before, after),
+        code: withoutEarlyUnlock.replace(before, after),
         map: null
       }
     }
