@@ -2,6 +2,20 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+function welcomeMessagePlugin(): Plugin {
+  return {
+    name: 'delta-welcome-message',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!/[\\/]src[\\/]App\.tsx$/.test(id)) return null
+      return code.replace(
+        '<p>La primera apertura requiere internet.</p>',
+        '<p>Bienvenido a la aplicación de Registro de Operaciones de DELTA MINING.</p>'
+      )
+    }
+  }
+}
+
 function localBackendProxy(env: Record<string, string>): Plugin {
   return {
     name: 'delta-local-backend-proxy',
@@ -54,6 +68,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
     plugins: [
+      welcomeMessagePlugin(),
       react(),
       localBackendProxy(env),
       VitePWA({
@@ -77,6 +92,9 @@ export default defineConfig(({ mode }) => {
         workbox: {
           navigateFallback: '/index.html',
           globPatterns: ['**/*.{js,css,html,svg,json}'],
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
           runtimeCaching: [
             {
               urlPattern: ({ url }) => url.pathname.endsWith('/bootstrap.json'),
