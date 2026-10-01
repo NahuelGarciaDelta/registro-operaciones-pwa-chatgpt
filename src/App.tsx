@@ -87,6 +87,7 @@ export default function App() {
   const [tab, setTab] = useState<'form' | 'pending' | 'receipts'>('form')
   const [syncing, setSyncing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [listUpdateState, setListUpdateState] = useState<'idle' | 'loading' | 'success'>('idle')
   const [lastOperator, setLastOperator] = useState('')
   const [turnoBlocked, setTurnoBlocked] = useState(false)
   const [qrLock, setQrLock] = useState<{ interno: string; proyecto: Proyecto } | null>(null)
@@ -170,19 +171,29 @@ export default function App() {
   }, [])
 
   const load = useCallback(async (showResult = false) => {
+    if (showResult) {
+      setListUpdateState('loading')
+      setMsg('')
+    }
+
     try {
-      const fresh = await getBootstrap()
+      const fresh = showResult ? await getBootstrapLive() : await getBootstrap()
       setData(fresh)
       await db.catalogs.put({ key: 'bootstrap', value: fresh })
-      if (showResult) setMsg('Listas actualizadas desde la fuente de datos.')
+      if (showResult) {
+        setMsg('Listas actualizadas desde la fuente de datos.')
+        setListUpdateState('success')
+        window.setTimeout(() => setListUpdateState('idle'), 2500)
+      }
     } catch (e) {
       const cached = await db.catalogs.get('bootstrap')
       if (cached) {
         setData(cached.value)
-        if (showResult) setMsg('Sin conexión al backend. Se mantienen las listas guardadas en el dispositivo.')
+        if (showResult) setMsg('No se pudieron actualizar las listas desde el servidor. Se mantienen las listas guardadas en el dispositivo.')
       } else if (showResult) {
         setMsg(e instanceof Error ? e.message : 'No se pudieron actualizar las listas.')
       }
+      if (showResult) setListUpdateState('idle')
     }
     await reloadPending()
   }, [])
@@ -560,8 +571,6 @@ export default function App() {
         setSaving(false)
       }
 
-      // Si existiera una copia pendiente antigua con el mismo UUID, ya no hace falta:
-      // el servidor acaba de confirmar este registro.
       await db.syncQueue.delete(item.id).catch(() => undefined)
       await reloadPending()
 
@@ -569,9 +578,6 @@ export default function App() {
       setLastOperator(operator)
       setTurnoBlocked(false)
 
-      // Refrescar el estado central para que el próximo parte utilice inmediatamente
-      // la información confirmada. Si este refresco secundario falla, el guardado sigue
-      // siendo válido porque createRecord/checkRecord ya lo confirmaron.
       let refreshedData = data
       try {
         const fresh = await getBootstrapLive()
@@ -647,7 +653,7 @@ export default function App() {
 
     {tab === 'form' && <>
       <div className="formToolbar">
-        <button className="secondary" type="button" onClick={() => load(true)}>ACTUALIZAR LISTAS</button>
+        <button className="secondary" type="button" disabled={listUpdateState === 'loading'} onClick={() => load(true)}>{listUpdateState === 'loading' ? 'ACTUALIZANDO…' : listUpdateState === 'success' ? '✓ LISTAS ACTUALIZADAS' : 'ACTUALIZAR LISTAS'}</button>
       </div>
       <section className="card formgrid">
         <p className="requiredNote wide">* Campos obligatorios</p>
