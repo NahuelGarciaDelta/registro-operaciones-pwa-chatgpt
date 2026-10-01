@@ -43,3 +43,41 @@ window.alert = () => undefined
 
 registerSW({ immediate: true })
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>)
+
+// -----------------------------------------------------------------------------
+// REACTIVAR SINCRONIZACIÓN DE PENDIENTES
+// -----------------------------------------------------------------------------
+// App.tsx ya sincroniza cuando recibe el evento "online". El problema era que,
+// si una carga se guardaba sin Internet, se cerraba la página y luego se volvía
+// a abrir cuando el teléfono YA estaba conectado, el navegador no emitía un
+// nuevo evento "online" porque la conexión ya existía al iniciar la página.
+//
+// Por eso, al abrir/reabrir la PWA, volver desde segundo plano o recuperar el
+// foco, disparamos una comprobación de conexión. Si hay Internet, App.tsx recibe
+// el mismo evento "online" y vacía inmediatamente la cola IndexedDB sin exigir
+// volver a escanear el QR del equipo.
+let wakeSyncTimer: number | undefined
+
+function requestPendingSyncOnWake() {
+  if (!navigator.onLine) return
+
+  if (wakeSyncTimer != null) {
+    window.clearTimeout(wakeSyncTimer)
+  }
+
+  wakeSyncTimer = window.setTimeout(() => {
+    window.dispatchEvent(new Event('online'))
+  }, 250)
+}
+
+// Apertura inicial: damos tiempo a que App.tsx monte sus listeners.
+window.setTimeout(requestPendingSyncOnWake, 500)
+
+// Volver a la pestaña/PWA desde segundo plano.
+window.addEventListener('pageshow', requestPendingSyncOnWake)
+window.addEventListener('focus', requestPendingSyncOnWake)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    requestPendingSyncOnWake()
+  }
+})
