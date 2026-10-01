@@ -86,6 +86,7 @@ export default function App() {
   const [msg, setMsg] = useState('')
   const [tab, setTab] = useState<'form' | 'pending' | 'receipts'>('form')
   const [syncing, setSyncing] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [lastOperator, setLastOperator] = useState('')
   const [turnoBlocked, setTurnoBlocked] = useState(false)
   const [qrLock, setQrLock] = useState<{ interno: string; proyecto: Proyecto } | null>(null)
@@ -223,7 +224,7 @@ export default function App() {
   const nightAllowed = previousShift === 'TURNO DIA'
   const turnoSaveBlocked = form['Turno de trabajo'] === 'TURNO NOCHE' && (turnoBlocked || !nightAllowed)
   const hfTooLow = form['Horómetro inicial'] != null && form['Horómetro final'] != null && form['Horómetro final'] < form['Horómetro inicial']
-  const successNotice = msg.startsWith('Registro guardado en el dispositivo.')
+  const successNotice = msg.startsWith('REGISTRO GUARDADO CORRECTAMENTE')
     || msg.includes('sincronizada(s) correctamente')
     || msg === 'Listas actualizadas desde la fuente de datos.'
     || msg === 'No hay cargas pendientes de sincronización.'
@@ -449,6 +450,8 @@ export default function App() {
   }
 
   const save = async () => {
+    if (saving) return
+
     try {
       if (!currentProject) {
         throw new Error('Seleccioná un proyecto antes de guardar el registro.')
@@ -524,34 +527,80 @@ export default function App() {
       if (hi == null || hf == null) throw new Error(`Completá ${initialMeterLabel} y ${finalMeterLabel}.`)
       if (hf < hi) throw new Error(`El ${meterNoun} final no puede ser menor al inicial.`)
 
-      const item: PendingRecord = {
-        id: form.ID, payload: form, signatureDataUrl: sig,
-        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        syncStatus: 'pending', syncAttempts: 0
+      if (!navigator.onLine) {
+        throw new Error('NO SE PUDO GUARDAR EL REGISTRO. No hay conexión con el servidor. El formulario se mantiene completo: recuperá conexión y tocá GUARDAR REGISTRO nuevamente.')
       }
-      await db.syncQueue.put(item)
-      setLastOperator(form.Operador)
-      setMsg('Registro guardado en el dispositivo. Hasta que se sincronice aparecerá en Pendientes.')
-      setSig(undefined)
+
+      const item: PendingRecord = {
+        id: form.ID,
+        payload: form,
+        signatureDataUrl: sig,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        syncStatus: 'pending',
+        syncAttempts: 0
+      }
+
+      setSaving(true)
+      setMsg('Guardando y confirmando en el servidor…')
+
+      let definitive: Rop02Record
+      try {
+        try {
+          definitive = await createRecord(item)
+        } catch (createError) {
+          const recovered = await checkRecord(item.id).catch(() => null)
+          if (!recovered) throw createError
+          definitive = recovered
+        }
+      } catch (saveError) {
+        const detail = saveError instanceof Error ? saveError.message : String(saveError)
+        throw new Error(`NO SE PUDO GUARDAR EL REGISTRO. No hubo confirmación del servidor. El formulario y la firma se conservaron para reintentar. ${detail}`)
+      } finally {
+        setSaving(false)
+      }
+
+      // Si existiera una copia pendiente antigua con el mismo UUID, ya no hace falta:
+      // el servidor acaba de confirmar este registro.
+      await db.syncQueue.delete(item.id).catch(() => undefined)
+      await reloadPending()
+
+      const operator = form.Operador
+      setLastOperator(operator)
       setTurnoBlocked(false)
 
-      if (qrLock && data) {
+      // Refrescar el estado central para que el próximo parte utilice inmediatamente
+      // la información confirmada. Si este refresco secundario falla, el guardado sigue
+      // siendo válido porque createRecord/checkRecord ya lo confirmaron.
+      let refreshedData = data
+      try {
+        const fresh = await getBootstrapLive()
+        refreshedData = fresh
+        setData(fresh)
+        await db.catalogs.put({ key: 'bootstrap', value: fresh })
+      } catch { /* el registro ya está confirmado; no invalidar el éxito */ }
+
+      setSig(undefined)
+
+      if (qrLock && refreshedData) {
         const next = blank(qrLock.proyecto)
-        const lockedCatalog = projectCatalog(data, qrLock.proyecto)
+        const lockedCatalog = projectCatalog(refreshedData, qrLock.proyecto)
         const eq = lockedCatalog.equipos.find(e => e.id === qrLock.interno)
-        const ref = provisionalReference(qrLock.interno, lockedCatalog.equipmentState, [...pending, item], qrLock.proyecto)
+        const confirmedPart = definitive['N° Parte']
+        const confirmedHf = definitive['Horómetro final']
+
         next.Interno = qrLock.interno
-        next.Equipo = eq?.equipo || form.Equipo
-        next['N° Parte'] = ref.parte
-        next['Horómetro inicial'] = ref.hi
+        next.Equipo = eq?.equipo || definitive.Equipo || form.Equipo
+        next['N° Parte'] = typeof confirmedPart === 'number' ? confirmedPart + 1 : null
+        next['Horómetro inicial'] = typeof confirmedHf === 'number' ? confirmedHf : null
         setForm(next)
       } else {
         setForm(blank())
       }
 
-      await reloadPending()
-      if (navigator.onLine) await sync(false)
+      setMsg('REGISTRO GUARDADO CORRECTAMENTE. El registro ya está confirmado en la planilla y disponible para otros dispositivos. El comprobante queda disponible en Comprobantes.')
     } catch (e) {
+      setSaving(false)
       if (e instanceof z.ZodError) {
         const labels: Record<string, string> = {
           Fecha: 'Fecha',
@@ -592,7 +641,7 @@ export default function App() {
     </header>
     <nav>
       <button onClick={() => setTab('form')} className={tab === 'form' ? 'active' : ''}>Nueva carga</button>
-      <button onClick={() => setTab('pending')} className={tab === 'pending' ? 'active' : ''}>Pendientes ({pending.length})</button>
+      {pending.length > 0 && <button onClick={() => setTab('pending')} className={tab === 'pending' ? 'active' : ''}>Pendientes ({pending.length})</button>}
       <button onClick={() => setTab('receipts')} className={tab === 'receipts' ? 'active' : ''}>Comprobantes</button>
     </nav>
 
@@ -666,7 +715,7 @@ export default function App() {
         </>}
         <div className="wide"><label>Firma *</label><SignaturePad key={form.ID} onChange={setSig} /></div>
         {msg && <div className={`notice wide${successNotice ? ' success' : ''}`}>{msg}</div>}
-        <button className="primary wide" disabled={hfTooLow || turnoSaveBlocked} onClick={save}>GUARDAR REGISTRO</button>
+        <button className="primary wide" disabled={saving || hfTooLow || turnoSaveBlocked} onClick={save}>{saving ? 'GUARDANDO…' : 'GUARDAR REGISTRO'}</button>
       </section>
     </>}
 
